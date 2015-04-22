@@ -104,7 +104,7 @@ cexprs x = case x of
   _ -> [cexpr x]
 
 data E a where
-  BV :: Word -> E a
+  BV :: Type a => Word -> E (Ref a)
   FV :: String -> E a
   I :: (Num a, Show a, CNum a) => Integer -> E a
   R :: (Show a, Fractional a, CFractional a) => Rational -> E a
@@ -160,8 +160,10 @@ data Body = Body
 infixl 8 ##
 (##) :: E (Ref a) -> E (Ref a -> Ref b) -> E b
 (##) x = load . (#) x
-      
-alloc :: E Word -> M (E (Ref a))
+
+instance Type a => Type (Array a) where typename _ = "asdf"
+
+alloc :: Type a => E Word -> M (E (Ref a))
 alloc sz = do
   i <- gets unique
   modify $ \st -> st{ unique = succ i }
@@ -169,7 +171,10 @@ alloc sz = do
   stmt $ Alloc sz v
   return v
 
-mk :: E a -> M (E (Ref a))
+instance Type Double where typename _ = "double"
+instance Type Word where typename _ = "unsigned int"
+                           
+mk :: Type a => E a -> M (E (Ref a))
 mk x = alloc 1 >>= \p -> p .= x >> return p
 
 ix :: E (Ref (Array a)) -> E Word -> E (Ref a)
@@ -204,12 +209,15 @@ cload x = CUnary CIndOp x un
 cestmt x = CBlockStmt $ CExpr (Just x) un
 cstring x = CConst $ CStrConst (CString x False) un
 
+class Type a where
+  typename :: E (Ref a) -> String
+
 cstat :: Stmt -> CBlockItem
 cstat x = case x of
   While a b -> CBlockStmt $ CWhile (cexpr a) (cblock b) False un
   Store a b -> cestmt $ CAssign CAssignOp (cload $ cexpr a) (cexpr b) un
   Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cload $ cexpr a] un
-  Alloc a (BV b) -> CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident "asdf") un) (CDeclr (Just $ cident $ cbvar b) [CArrDeclr [] (CArrSize False $ cexpr a) un] Nothing [] un) Nothing
+  Alloc a bv@(BV b) -> CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident $ typename bv) un) (CDeclr (Just $ cident $ cbvar b) [CArrDeclr [] (CArrSize False $ cexpr a) un] Nothing [] un) Nothing
     
 cblock :: Block -> CStat
 cblock (Block xs) = CCompound [] (map cstat xs) un
@@ -221,7 +229,7 @@ data Stmt where
   While :: E Bool -> Block -> Stmt
   Store :: E (Ref a) -> E a -> Stmt
   Print :: E a -> Stmt
-  Alloc :: E Word -> E (Ref a) -> Stmt
+  Alloc :: Type a => E Word -> E (Ref a) -> Stmt
     
 printf :: E a -> M ()
 printf x = stmt $ Print x
@@ -522,7 +530,9 @@ initBody body (a, b, c, d, e, f, g) = do
 indices :: [E Word]
 indices = map fromIntegral [0 :: Word .. ]
 
-mkArray :: (E (Ref a) -> b -> M ()) -> [b] -> M (E (Ref (Array a)))
+instance Type Body where typename _ = "body"
+                         
+mkArray :: Type a => (E (Ref a) -> b -> M ()) -> [b] -> M (E (Ref (Array a)))
 mkArray f xs = do
   arr <- alloc $ fromIntegral $ length xs
   sequence_ [ f (ix arr i) x | (x, i) <- zip xs indices ]
