@@ -1,0 +1,3 @@
+*_flymake.hs
+*.gcc_run
+gen.c
