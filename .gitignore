@@ -2,3 +2,8 @@
 *.gcc_run
 gen.c
 dist/
+*.exe
+*.stackdump
+*~
+*.out
+

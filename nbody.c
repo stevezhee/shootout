@@ -131,6 +131,19 @@ int main(int argc, char ** argv)
   int n = atoi(argv[1]);
   int i;
 
+  /* BAL: debug print */
+  for (i = 0; i < 5; i++)
+    {
+      printf ("%.9f\n", bodies[i].x);
+      printf ("%.9f\n", bodies[i].y);
+      printf ("%.9f\n", bodies[i].z);
+      printf ("%.9f\n", bodies[i].vx);
+      printf ("%.9f\n", bodies[i].vy);
+      printf ("%.9f\n", bodies[i].vz);
+      printf ("%.9f\n", bodies[i].mass);
+    }
+  printf ("%.9f\n", energy(NBODIES, bodies)); // BAL: debug
+
   offset_momentum(NBODIES, bodies);
   printf ("%.9f\n", energy(NBODIES, bodies));
   for (i = 1; i <= n; i++)

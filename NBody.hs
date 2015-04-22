@@ -3,15 +3,15 @@
 
 module NBody where
 
-import Data.Word
-import Control.Applicative
-import Control.Monad.State
-import Language.C.DSL hiding ((#), (.=), for, while)
+import           Control.Applicative
+import           Control.Exception
+import           Control.Monad.State
+import           Data.Word
 import qualified Language.C.DSL as C
-
+import           Language.C.DSL hiding ((#), (.=), for, while)
 -- import Language.C
 -- import Language.C.Syntax
-import Text.PrettyPrint
+import           Text.PrettyPrint
 
 undef = error . (++) "undefined:"
 
@@ -56,7 +56,7 @@ cvar x = CVar (cident x) un
 cident = internalIdent
 
 cfield :: String -> CExpr -> CExpr
-cfield x y = CMember y (cident x) True un
+cfield x y = caddrof $ CMember y (cident x) True un
 
 cbvar :: Word -> String
 cbvar a = "v" ++ show a
@@ -79,6 +79,7 @@ ccode = writeFile "gen.c" . show . pretty . cblock
 
 cbinary o a b = CBinary o a b un
   
+cbuiltins :: [(String, [CExpression NodeInfo] -> CExpression NodeInfo)]
 cbuiltins =
   [ ("load", cunaryf cload)
   , ("+", cbinaryf $ cbinary CAddOp)
@@ -91,7 +92,7 @@ cbuiltins =
   , (">=", cbinaryf $ cbinary CGeqOp)
   , (">", cbinaryf $ cbinary CGrOp)
   , ("<", cbinaryf $ cbinary CLeOp)
-  , ("ix", cbinaryf $ \a b -> CIndex a b un)
+  , ("ix", cbinaryf $ \a b -> caddrof $ CIndex a b un)
   ]
 
 cunaryf f = \[x] -> f x
@@ -104,7 +105,7 @@ cexprs x = case x of
   _ -> [cexpr x]
 
 data E a where
-  BV :: Type a => Word -> E (Ref a)
+  BV :: Typed a => Word -> E (Ref a)
   FV :: String -> E a
   I :: (Num a, Show a, CNum a) => Integer -> E a
   R :: (Show a, Fractional a, CFractional a) => Rational -> E a
@@ -161,9 +162,10 @@ infixl 8 ##
 (##) :: E (Ref a) -> E (Ref a -> Ref b) -> E b
 (##) x = load . (#) x
 
-instance Type a => Type (Array a) where typename _ = "asdf"
+instance (Typed a, Count b) => Typed (Array a b) where
+  typeof _ = TArray (typeof (unused :: E (Ref a))) (countof (unused :: b))
 
-alloc :: Type a => E Word -> M (E (Ref a))
+alloc :: Typed a => E Word -> M (E (Ref a))
 alloc sz = do
   i <- gets unique
   modify $ \st -> st{ unique = succ i }
@@ -171,13 +173,13 @@ alloc sz = do
   stmt $ Alloc sz v
   return v
 
-instance Type Double where typename _ = "double"
-instance Type Word where typename _ = "unsigned int"
+instance Typed Double where typeof _ = TName "double"
+instance Typed Word where typeof _ = TName "uint32_t"
                            
-mk :: Type a => E a -> M (E (Ref a))
+mk :: Typed a => E a -> M (E (Ref a))
 mk x = alloc 1 >>= \p -> p .= x >> return p
 
-ix :: E (Ref (Array a)) -> E Word -> E (Ref a)
+ix :: E (Ref (Array a b)) -> E Word -> E (Ref a)
 ix = binop "ix"
 
 load :: E (Ref a) -> E a
@@ -206,18 +208,30 @@ newtype Block =  Block [Stmt]
 -- CBlockItem
 
 cload x = CUnary CIndOp x un
+caddrof x = CUnary CAdrOp x un
+
 cestmt x = CBlockStmt $ CExpr (Just x) un
 cstring x = CConst $ CStrConst (CString x False) un
 
-class Type a where
-  typename :: E (Ref a) -> String
+class Typed a where typeof :: E (Ref a) -> Type
 
+data Type
+  = TName String
+  | TArray Type Word
+  deriving Show
+           
 cstat :: Stmt -> CBlockItem
 cstat x = case x of
   While a b -> CBlockStmt $ CWhile (cexpr a) (cblock b) False un
   Store a b -> cestmt $ CAssign CAssignOp (cload $ cexpr a) (cexpr b) un
-  Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cload $ cexpr a] un
-  Alloc a bv@(BV b) -> CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident $ typename bv) un) (CDeclr (Just $ cident $ cbvar b) [CArrDeclr [] (CArrSize False $ cexpr a) un] Nothing [] un) Nothing
+  Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cexpr a] un -- BAL: do based on type
+  Alloc a bv@(BV b) -> case typeof bv of
+    TArray (TName t) n -> cdecl t n
+    TName t -> cdecl t 1
+    where
+      cdecl :: String -> Word -> CBlockItem
+      cdecl t n =
+         CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident t) un) (CDeclr (Just $ cident $ cbvar b) [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un] Nothing [] un) Nothing
     
 cblock :: Block -> CStat
 cblock (Block xs) = CCompound [] (map cstat xs) un
@@ -229,7 +243,7 @@ data Stmt where
   While :: E Bool -> Block -> Stmt
   Store :: E (Ref a) -> E a -> Stmt
   Print :: E a -> Stmt
-  Alloc :: Type a => E Word -> E (Ref a) -> Stmt
+  Alloc :: Typed a => E Word -> E (Ref a) -> Stmt
     
 printf :: E a -> M ()
 printf x = stmt $ Print x
@@ -265,11 +279,11 @@ infix 4 /=.
 loop :: E Word -> (E Word -> M ()) -> M ()
 loop = loopNM 0
 
-each :: E (Ref (Array a)) -> (E (Ref a) -> M ()) -> M ()
+each :: Count b => E (Ref (Array a b)) -> (E (Ref a) -> M ()) -> M ()
 each = eachN 0
 
-eachN :: E Word -> E (Ref (Array a)) -> (E (Ref a) -> M ()) -> M ()
-eachN i arr f = loopNM i (arr##count) $ f . ix arr
+eachN :: Count b => E Word -> E (Ref (Array a b)) -> (E (Ref a) -> M ()) -> M ()
+eachN i arr f = loopNM i (count arr) $ f . ix arr
 
 loopNM :: E Word -> E Word -> (E Word -> M ()) -> M ()
 loopNM x y f = do
@@ -291,7 +305,7 @@ infix 4 -=
 adjust f x y = x .= f (load x) y
   
 data Ref a
-data Array a
+data Array a b
 
 type M a = State St a
 
@@ -321,13 +335,20 @@ vz = FV ".vz"
 mass :: E (Ref Body -> Ref Double)
 mass = FV ".mass"
 
-count :: E (Ref (Array a) -> Ref Word)
-count = FV ".count"
+count :: Count b => E (Ref (Array a b)) -> E Word
+count (_ :: E (Ref (Array a b))) = fromIntegral $ countof (unused :: b)
+
+class Count a where
+  countof :: a -> Word
+
+instance Count Five where countof _ = 5
+
+data Five = Five
 
 -- void advance(int nbodies, struct planet * bodies, double dt)
 -- {
 --   int i, j;
-advance :: E (Ref (Array Body)) -> E Double -> M ()
+advance :: Count b => E (Ref (Array Body b)) -> E Double -> M ()
 advance bodies dt = do
 --   for (i = 0; i < nbodies; i++) {
 --     struct planet * b = &(bodies[i]);
@@ -433,6 +454,7 @@ instance (Show a, Floating a, CNum a, CFractional a) => Floating (E a) where
 --   return e;
 -- }
 
+energy :: Count b => E (Ref (Array Body b)) -> M (E Double)
 energy bodies = do
   e <- mk 0
   each bodies $ \b -> do
@@ -444,7 +466,7 @@ energy bodies = do
           dz = f z
           distance = sqrt $ dx^2 + dy^2 + dz^2
       e -= (b##mass * b2##mass) / distance
-  return e
+  return $ load e
   
 -- void offset_momentum(int nbodies, struct planet * bodies)
 -- {
@@ -530,15 +552,19 @@ initBody body (a, b, c, d, e, f, g) = do
 indices :: [E Word]
 indices = map fromIntegral [0 :: Word .. ]
 
-instance Type Body where typename _ = "body"
-                         
-mkArray :: Type a => (E (Ref a) -> b -> M ()) -> [b] -> M (E (Ref (Array a)))
-mkArray f xs = do
-  arr <- alloc $ fromIntegral $ length xs
+instance Typed Body where typeof _ = TName "body_t"
+
+assertM x = assert x $ return ()
+
+mkArray :: (Typed a, Count cnt) => cnt -> (E (Ref a) -> b -> M ()) -> [b] -> M (E (Ref (Array a cnt)))
+mkArray cnt f xs = do
+  let n = fromIntegral $ length xs
+  assertM (countof cnt == n)
+  arr <- alloc $ fromIntegral n
   sequence_ [ f (ix arr i) x | (x, i) <- zip xs indices ]
   return arr
   
-mkBodies = mkArray initBody
+mkBodies = mkArray Five initBody
   [ (0, 0, 0, 0, 0, 0, 1) {- sun -}
   , {- jupiter -}
     ( 4.84143144246472090e+00,
@@ -580,8 +606,18 @@ mkBodies = mkArray initBody
 
 main_ n = execM $ do
   bodies <- mkBodies
-  offset_momentum bodies
+  each bodies $ \b -> do
+    let f p = printf (b##p)
+    f x
+    f y
+    f z
+    f vx
+    f vy
+    f vz
+    f mass
   let f = energy bodies >>= printf
+  f
+  offset_momentum bodies
   f
   loop n $ \_ -> advance bodies 0.01
   f
