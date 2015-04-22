@@ -1,1 +1,1 @@
-Haskell DSL
+Haskell EDSL
