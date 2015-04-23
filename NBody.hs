@@ -604,8 +604,9 @@ mkBodies = mkArray Five initBody
      )
   ]
 
-main_ n = execM $ do
-  bodies <- mkBodies
+main = ccode main_
+
+debug_print bodies = do
   each bodies $ \b -> do
     let f p = printf (b##p)
     f x
@@ -615,12 +616,18 @@ main_ n = execM $ do
     f vy
     f vz
     f mass
-  let f = energy bodies >>= printf
-  f
+  energy bodies >>= printf
+  
+main_ = execM $ do
+  bodies <- mkBodies
+  debug_print bodies
   offset_momentum bodies
-  f
-  loop n $ \_ -> advance bodies 0.01
-  f
+  debug_print bodies
+  let f = energy bodies >>= printf
+  -- f
+  loop (FV "n") $ \_ -> advance bodies 0.01
+  debug_print bodies
+  -- f
   
 -- int main(int argc, char ** argv)
 -- {

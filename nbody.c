@@ -126,11 +126,9 @@ struct planet bodies[NBODIES] = {
   }
 };
 
-int main(int argc, char ** argv)
+void debug_print()
 {
-  int n = atoi(argv[1]);
   int i;
-
   /* BAL: debug print */
   for (i = 0; i < 5; i++)
     {
@@ -143,12 +141,21 @@ int main(int argc, char ** argv)
       printf ("%.9f\n", bodies[i].mass);
     }
   printf ("%.9f\n", energy(NBODIES, bodies)); // BAL: debug
+}
 
+int main(int argc, char ** argv)
+{
+  int n = atoi(argv[1]);
+  int i;
+
+  debug_print();
   offset_momentum(NBODIES, bodies);
-  printf ("%.9f\n", energy(NBODIES, bodies));
+  debug_print();
+  //  printf ("%.9f\n", energy(NBODIES, bodies));
   for (i = 1; i <= n; i++)
     advance(NBODIES, bodies, 0.01);
-  printf ("%.9f\n", energy(NBODIES, bodies));
+  debug_print();
+  //  printf ("%.9f\n", energy(NBODIES, bodies));
   return 0;
 }
 

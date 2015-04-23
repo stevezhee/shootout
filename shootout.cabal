@@ -60,7 +60,7 @@ library
   other-extensions:    ScopedTypeVariables, GADTs
   
   -- Other library packages from which modules are imported.
-  build-depends:       base >=4.7 && <4.8, mtl >=2.2 && <2.3, c-dsl >=0.3 && <0.4, pretty >=1.1 && <1.2
+  build-depends:       base >=4.7 && <4.8, mtl >=2.1 && <2.3, c-dsl >=0.3 && <0.4, pretty >=1.1 && <1.2
   
   -- Directories containing source files.
   -- hs-source-dirs:      
