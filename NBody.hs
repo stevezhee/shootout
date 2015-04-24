@@ -416,17 +416,25 @@ unop v = App (FV v)
 binop :: String -> E a -> E b -> E c
 binop v a b = App (unop v a) b
 
+binopE :: String -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> E a -> E a -> E a
+binopE v f g x y = case (x,y) of
+  (R a, R b) -> R $ f a b
+  (I a, I b) -> I $ g a b
+  (I a, R _) -> binopE v f g (R $ fromIntegral a) y
+  (R _, I b) -> binopE v f g x (R $ fromIntegral b)
+  _ -> binop v x y
+    
 instance (Show a, Num a, CNum a) => Num (E a) where
-  (+) = binop "+"
-  (*) = binop "*"
+  (+) = binopE "+" (+) (+)
+  (*) = binopE "*" (*) (*)
   abs = unop "abs"
   signum = unop "signum"
   fromInteger = I
-  (-) = binop "-"
+  (-) = binopE "-" (-) (-)
   
 instance (Show a, Fractional a, CNum a, CFractional a) => Fractional (E a) where
   fromRational = R
-  (/) = binop "/"
+  (/) = binopE "/" (/) (undef "/")
   
 instance (Show a, Floating a, CNum a, CFractional a) => Floating (E a) where
   -- #define pi 3.141592653589793
