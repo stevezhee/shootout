@@ -2,6 +2,7 @@ GCC = gcc -O2 -o $@ $< -lm
 
 all : nbody.out main.out
 	diff $^
+	ls -al *.exe
 
 %.out : %.exe
 	./$< 1 > $@

@@ -64,6 +64,8 @@ double energy(int nbodies, struct planet * bodies)
       double dz = b->z - b2->z;
       double distance = sqrt(dx * dx + dy * dy + dz * dz);
       e -= (b->mass * b2->mass) / distance;
+      printf ("%.9f\n", e);
+
     }
   }
   return e;
@@ -148,14 +150,14 @@ int main(int argc, char ** argv)
   int n = atoi(argv[1]);
   int i;
 
-  debug_print();
+  /* debug_print(); */
   offset_momentum(NBODIES, bodies);
-  debug_print();
-  //  printf ("%.9f\n", energy(NBODIES, bodies));
+  /* debug_print(); */
+  printf ("%.9f\n", energy(NBODIES, bodies));
   for (i = 1; i <= n; i++)
     advance(NBODIES, bodies, 0.01);
-  debug_print();
-  //  printf ("%.9f\n", energy(NBODIES, bodies));
+  /* debug_print(); */
+  printf ("%.9f\n", energy(NBODIES, bodies));
   return 0;
 }
 

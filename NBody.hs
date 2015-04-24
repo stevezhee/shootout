@@ -287,11 +287,11 @@ infix 4 /=.
 loop :: E Word -> (E Word -> M ()) -> M ()
 loop = loopNM 0
 
-each :: Count b => E (Ref (Array a b)) -> (E (Ref a) -> M ()) -> M ()
+each :: Count b => E (Ref (Array a b)) -> (E (Ref a) -> E Word -> M ()) -> M ()
 each = eachN 0
 
-eachN :: Count b => E Word -> E (Ref (Array a b)) -> (E (Ref a) -> M ()) -> M ()
-eachN i arr f = loopNM i (count arr) $ f . ix arr
+eachN :: Count b => E Word -> E (Ref (Array a b)) -> (E (Ref a) -> E Word -> M ()) -> M ()
+eachN i arr f = loopNM i (count arr) $ \i -> f (ix arr i) i
 
 loopNM :: E Word -> E Word -> (E Word -> M ()) -> M ()
 loopNM x y f = do
@@ -376,8 +376,8 @@ advance bodies dt = do
 --     }
 --   }
 
-  each bodies $ \b -> do
-    eachN 1 bodies $ \b2 -> do
+  each bodies $ \b i -> do
+    eachN (i + 1) bodies $ \b2 _ -> do
       let
         f p = b##p - b2##p
         dx = f x
@@ -401,7 +401,7 @@ advance bodies dt = do
 --     b->z += dt * b->vz;
 --   }
 -- }
-  each bodies $ \b -> do
+  each bodies $ \b _ -> do
     let f p q = b#p += (dt * (b##q))
     f x vx
     f y vy
@@ -465,15 +465,17 @@ instance (Show a, Floating a, CNum a, CFractional a) => Floating (E a) where
 energy :: Count b => E (Ref (Array Body b)) -> M (E Double)
 energy bodies = do
   e <- mk 0
-  each bodies $ \b -> do
+  each bodies $ \b i -> do
     e += 0.5 * b##mass * ((b##vx)^2 + (b##vy)^2 + (b##vz)^2)
-    eachN 1 bodies $ \b2 -> do
-      let f p = b##p - b2##p
-          dx = f x
-          dy = f y
-          dz = f z
-          distance = sqrt $ dx^2 + dy^2 + dz^2
+    eachN (i + 1) bodies $ \b2 _ -> do
+      let
+        f p = b##p - b2##p
+        dx = f x
+        dy = f y
+        dz = f z
+        distance = sqrt $ dx^2 + dy^2 + dz^2
       e -= (b##mass * b2##mass) / distance
+      printf $ load e
   return $ load e
   
 -- void offset_momentum(int nbodies, struct planet * bodies)
@@ -490,12 +492,13 @@ energy bodies = do
 --   bodies[0].vz = - pz / solar_mass;
 -- }
 
+offset_momentum :: E (Ref (Array Body Five)) -> M ()
 offset_momentum bodies = do
   px <- mk 0
   py <- mk 0
   pz <- mk 0
-  each bodies $ \b -> do
-    let f p q = p += b##vx * b##mass
+  each bodies $ \b _ -> do
+    let f p q = p += b##q * b##mass
     f px vx
     f py vy
     f pz vz
@@ -547,16 +550,6 @@ offset_momentum bodies = do
 --   }
 -- };
 
-initBody :: E (Ref Body) -> (E Double, E Double, E Double, E Double, E Double, E Double, E Double) -> M ()
-initBody body (a, b, c, d, e, f, g) = do
-  body#x .= a
-  body#y .= b
-  body#z .= c
-  body#vx .= d * days_per_year
-  body#vy .= e * days_per_year
-  body#vz .= f * days_per_year
-  body#mass .= g * solar_mass
-
 indices :: [E Word]
 indices = map fromIntegral [0 :: Word .. ]
 
@@ -571,6 +564,16 @@ mkArray cnt f xs = do
   arr <- alloc $ fromIntegral n
   sequence_ [ f (ix arr i) x | (x, i) <- zip xs indices ]
   return arr
+
+initBody :: E (Ref Body) -> (E Double, E Double, E Double, E Double, E Double, E Double, E Double) -> M ()
+initBody body (a, b, c, d, e, f, g) = do
+  body#x .= a
+  body#y .= b
+  body#z .= c
+  body#vx .= d * days_per_year
+  body#vy .= e * days_per_year
+  body#vz .= f * days_per_year
+  body#mass .= g * solar_mass
   
 mkBodies = mkArray Five initBody
   [ (0, 0, 0, 0, 0, 0, 1) {- sun -}
@@ -614,8 +617,9 @@ mkBodies = mkArray Five initBody
 
 main = ccode main_
 
+debug_print :: Count b => E (Ref (Array Body b)) -> M ()
 debug_print bodies = do
-  each bodies $ \b -> do
+  each bodies $ \b _ -> do
     let f p = printf (b##p)
     f x
     f y
@@ -628,14 +632,14 @@ debug_print bodies = do
   
 main_ = execM $ do
   bodies <- mkBodies
-  debug_print bodies
+  -- debug_print bodies
   offset_momentum bodies
-  debug_print bodies
+  -- debug_print bodies
   let f = energy bodies >>= printf
-  -- f
+  f
   loop (FV "n") $ \_ -> advance bodies 0.01
-  debug_print bodies
-  -- f
+  -- debug_print bodies
+  f
   
 -- int main(int argc, char ** argv)
 -- {
