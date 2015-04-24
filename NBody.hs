@@ -12,6 +12,7 @@ import           Language.C.DSL hiding ((#), (.=), for, while)
 -- import Language.C
 -- import Language.C.Syntax
 import           Text.PrettyPrint
+import Data.Generics
 
 undef = error . (++) "undefined:"
 
@@ -55,9 +56,6 @@ cvar x = CVar (cident x) un
 
 cident = internalIdent
 
-cfield :: String -> CExpr -> CExpr
-cfield x y = caddrof $ CMember y (cident x) True un
-
 cbvar :: Word -> String
 cbvar a = "v" ++ show a
 
@@ -75,7 +73,7 @@ cexpr (x :: E a) = case x of
       a@(CVar v _) : bs = cexprs x
       s = identToString v
 
-ccode = writeFile "gen.c" . show . pretty . cblock
+ccode = writeFile "gen.c" . show . pretty . everywhere (mkT elimCAdrOp) . cblock
 
 cbinary o a b = CBinary o a b un
   
@@ -207,8 +205,18 @@ newtype Block =  Block [Stmt]
 -- CStat
 -- CBlockItem
 
+cfield :: String -> CExpr -> CExpr
+cfield x y = caddrof $ CMember y (cident x) True un
+
 cload x = CUnary CIndOp x un
+
 caddrof x = CUnary CAdrOp x un
+
+elimCAdrOp :: CExpr -> CExpr
+elimCAdrOp x = case x of
+  CMember (CUnary CAdrOp a _) b True c -> CMember a b False c
+  CUnary CIndOp (CUnary CAdrOp x _) _ -> x
+  _ -> x
 
 cestmt x = CBlockStmt $ CExpr (Just x) un
 cstring x = CConst $ CStrConst (CString x False) un
