@@ -64,7 +64,11 @@ cexpr (x :: E a) = case x of
   I a -> cnum (unused :: a) a
   R a -> cfractional (unused :: a) a
   FV a -> cvar a
-  BV a -> cvar $ cbvar a
+  BV a -> f $ cvar $ cbvar a
+    where
+      f = case typeof x of
+        TName{} -> caddrof
+        TArray{} -> id
   App{} -> case (s, lookup s cbuiltins) of
     ('.':fld, _) -> cunaryf (cfield fld) bs
     (_, Just f) -> f bs
@@ -234,12 +238,11 @@ cstat x = case x of
   Store a b -> cestmt $ CAssign CAssignOp (cload $ cexpr a) (cexpr b) un
   Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cexpr a] un -- BAL: do based on type
   Alloc a bv@(BV b) -> case typeof bv of
-    TArray (TName t) n -> cdecl t n
-    TName t -> cdecl t 1
+    TArray (TName t) n -> cdecl t [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un]
+    TName t -> cdecl t []
     where
-      cdecl :: String -> Word -> CBlockItem
-      cdecl t n =
-         CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident t) un) (CDeclr (Just $ cident $ cbvar b) [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un] Nothing [] un) Nothing
+      cdecl t cs =
+         CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident t) un) (CDeclr (Just $ cident $ cbvar b) cs Nothing [] un) Nothing
     
 cblock :: Block -> CStat
 cblock (Block xs) = CCompound [] (map cstat xs) un
