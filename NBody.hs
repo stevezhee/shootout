@@ -1,5 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module NBody where
 
@@ -12,10 +13,14 @@ import           Language.C.DSL hiding ((#), (.=), for, while)
 -- import Language.C
 -- import Language.C.Syntax
 import           Text.PrettyPrint
-import Data.Generics
+import           Data.Generics hiding (Generic)
+import           GHC.Generics (Generic)
+-- import           Data.IntMap hiding (lookup, map, adjust)
+import qualified Data.HashMap.Strict as M
+import           Data.Hashable
+import Data.Maybe
 
 undef = error . (++) "undefined:"
-
 {- The Computer Language Benchmarks Game
    http://benchmarksgame.alioth.debian.org/
   
@@ -31,12 +36,6 @@ undef = error . (++) "undefined:"
 -- LongDoubleConst String Rational !SrcLoc	 
 -- CharConst String Char !SrcLoc	 
 -- StringConst [String] String !SrcLoc
-
-class CNum a where
-  cnum :: a -> Integer -> CExpr
-
-class CFractional a where
-  cfractional :: a -> Rational -> CExpr
   
 un = undefNode
 
@@ -47,6 +46,8 @@ instance CNum Word where
 cdouble :: Double -> CExpr
 cdouble x = CConst $ CFloatConst (CFloat $ show x) un
 
+class CNum a where cnum :: a -> Integer -> CExpr
+class CFractional a where cfractional :: a -> Rational -> CExpr
 instance CNum Double where cnum _ = cdouble . fromIntegral
 instance CFractional Double where cfractional _ = cdouble . fromRational
 
@@ -77,7 +78,46 @@ cexpr (x :: E a) = case x of
       a@(CVar v _) : bs = cexprs x
       s = identToString v
 
-ccode = writeFile "gen.c" . show . pretty . everywhere (mkT elimCAdrOp) . cblock
+toCExpr :: Exp -> M CExpr
+toCExpr x = case x of
+  EI a -> return $ cnum (unused :: Word) a -- BAL: handle polymorphism
+  ER a -> return $ cfractional (unused :: Double) a -- BAL: handle polymorphism
+  EFV a -> return $ cvar a
+  EBV a t -> return $ f $ cvar $ cbvar a
+    where
+      f = case t of
+        TName{} -> caddrof
+        TArray{} -> id
+  EApp us -> do
+    a@(CVar v _) : bs <- mapM toCExprArg us
+    let s = identToString v
+    return $ case (s, lookup s cbuiltins) of
+      ('.':fld, _) -> cunaryf (cfield fld) bs
+      (_, Just f) -> f bs
+      _ -> a C.# bs
+
+toCExprArg :: Key -> M CExpr
+toCExprArg k = do
+  mR <- gets keyMap
+  case M.lookup k mR of
+    Nothing -> undef "toCExprArg"
+    Just a -> case a of
+      EApp{} -> return $ cvar $ "k" ++ show k -- BAL: fixme
+      _ -> toCExpr a
+
+blargh :: M [CExpr]
+blargh = do
+  mR <- gets keyMap
+  liftM catMaybes $ mapM foof $ M.toList mR
+  
+foof (x,y@EApp{}) = do
+  e <- toCExpr y
+  return $ Just $ CAssign CAssignOp (cvar $ "k" ++ show x) e un
+foof _ = return Nothing
+  
+ccode :: M () -> IO ()
+-- ccode = writeFile "gen.c" . show . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
+ccode = print . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
 
 cbinary o a b = CBinary o a b un
   
@@ -113,6 +153,60 @@ data E a where
   R :: (Show a, Fractional a, CFractional a) => Rational -> E a
   App :: E (b -> a) -> E b -> E a
 
+type Key = Word
+
+data Exp
+  = EBV Word Type
+  | EFV String
+  | EI Integer
+  | ER Rational
+  | EApp [Key]
+  | EIf Key Key Key
+    deriving (Show, Eq, Generic, Ord)
+
+instance Hashable Exp
+instance Hashable Type
+
+data World
+  
+-- while = \x y z -> if x then (y (while x y z)) else z
+-- while :: E Bool -> ((World -> World) -> (World -> World)) -> (World -> World) -> (World -> World)
+-- store :: E (Ref a) -> E a -> (World -> World)
+-- print :: E a -> (World -> World)
+-- alloc :: E Word -> E (Ref a) -> (World -> World)
+
+data Stmt where
+  While :: E Bool -> Block -> Stmt
+  Store :: E (Ref a) -> E a -> Stmt
+  Print :: E a -> Stmt
+  Alloc :: Typed a => E Word -> E (Ref a) -> Stmt
+
+toKey :: E a -> M Key
+toKey x = case x of
+  BV a -> nameExp $ EBV a $ typeof x
+  FV a -> nameExp $ EFV a
+  I a -> nameExp $ EI a
+  R a -> nameExp $ ER a
+  App{} -> liftM EApp (toKeys x) >>= nameExp
+
+toKeys :: E a -> M [Key]
+toKeys x = case x of
+  App a b -> do
+    k <- toKey b
+    ks <- toKeys a
+    return $ ks ++ [k]
+  _ -> toKey x >>= \k -> return [k]
+
+nameExp :: Exp -> M Key
+nameExp k = do
+  m <- gets expMap
+  case M.lookup k m of
+    Nothing -> do
+      i <- gets unique
+      modify $ \st -> st{ unique = succ i, expMap = M.insert k i m, keyMap = M.insert i k $ keyMap st }
+      return i
+    Just v -> return v
+             
 ppE :: E a -> Doc
 ppE (x :: E a) = case x of
   BV a -> text $ "%" ++ show a
@@ -230,7 +324,7 @@ class Typed a where typeof :: E (Ref a) -> Type
 data Type
   = TName String
   | TArray Type Word
-  deriving Show
+  deriving (Show, Eq, Ord, Generic)
            
 cstat :: Stmt -> CBlockItem
 cstat x = case x of
@@ -249,12 +343,6 @@ cblock (Block xs) = CCompound [] (map cstat xs) un
 
 mkBlock :: [Stmt] -> Block
 mkBlock = Block . reverse
-
-data Stmt where
-  While :: E Bool -> Block -> Stmt
-  Store :: E (Ref a) -> E a -> Stmt
-  Print :: E a -> Stmt
-  Alloc :: Typed a => E Word -> E (Ref a) -> Stmt
     
 printf :: E a -> M ()
 printf x = stmt $ Print x
@@ -320,13 +408,14 @@ data Array a b
 
 type M a = State St a
 
-data St = St{ unique :: Word, stmts :: [[Stmt]] }
+data St = St{ unique :: Word, stmts :: [[Stmt]], expMap :: M.HashMap Exp Word, keyMap :: M.HashMap Word Exp } deriving Show
 
-initSt = St 0 [[]]
+initSt :: St
+initSt = St 0 [[]] M.empty M.empty
 
 execM :: M () -> Block
 execM x = let [b] = stmts $ execState x initSt in mkBlock b
-  
+
 infixl 9 #
 (#) :: E (Ref a) -> E (Ref a -> Ref b) -> E (Ref b)
 (#) = flip App
@@ -418,10 +507,10 @@ binop v a b = App (unop v a) b
 
 binopE :: String -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> E a -> E a -> E a
 binopE v f g x y = case (x,y) of
-  (R a, R b) -> R $ f a b
-  (I a, I b) -> I $ g a b
-  (I a, R _) -> binopE v f g (R $ fromIntegral a) y
-  (R _, I b) -> binopE v f g x (R $ fromIntegral b)
+  -- (R a, R b) -> R $ f a b
+  -- (I a, I b) -> I $ g a b
+  -- (I a, R _) -> binopE v f g (R $ fromIntegral a) y
+  -- (R _, I b) -> binopE v f g x (R $ fromIntegral b)
   _ -> binop v x y
     
 instance (Show a, Num a, CNum a) => Num (E a) where
@@ -488,7 +577,9 @@ energy bodies = do
       e -= (b##mass * b2##mass) / distance
       printf $ load e
   return $ load e
-  
+
+t = printf $ 3 + (2 :: E Word)
+
 -- void offset_momentum(int nbodies, struct planet * bodies)
 -- {
 --   double px = 0.0, py = 0.0, pz = 0.0;
@@ -641,7 +732,7 @@ debug_print bodies = do
     f mass
   energy bodies >>= printf
   
-main_ = execM $ do
+main_ = do
   bodies <- mkBodies
   -- debug_print bodies
   offset_momentum bodies
