@@ -4,21 +4,22 @@
 
 module NBody where
 
+-- import           Data.IntMap hiding (lookup, map, adjust)
+-- import Language.C
+-- import Language.C.Syntax
 import           Control.Applicative
 import           Control.Exception
 import           Control.Monad.State
-import           Data.Word
-import qualified Language.C.DSL as C
-import           Language.C.DSL hiding ((#), (.=), for, while)
--- import Language.C
--- import Language.C.Syntax
-import           Text.PrettyPrint
 import           Data.Generics hiding (Generic)
-import           GHC.Generics (Generic)
--- import           Data.IntMap hiding (lookup, map, adjust)
-import qualified Data.HashMap.Strict as M
 import           Data.Hashable
-import Data.Maybe
+import           Data.List
+import           Data.Maybe
+import           Data.Word
+import           GHC.Generics (Generic)
+import           Language.C.DSL hiding ((#), (.=), for, while)
+import           Text.PrettyPrint
+import qualified Data.HashMap.Strict as M
+import qualified Language.C.DSL as C
 
 undef = error . (++) "undefined:"
 {- The Computer Language Benchmarks Game
@@ -105,16 +106,23 @@ toCExprArg k = do
       EApp{} -> return $ cvar $ "k" ++ show k -- BAL: fixme
       _ -> toCExpr a
 
-blargh :: M [CExpr]
-blargh = do
-  mR <- gets keyMap
-  liftM catMaybes $ mapM foof $ M.toList mR
-  
+runM :: M a -> (a, St)
+runM = flip runState initSt
+
+baz :: M () -> IO ()
+baz m = mapM_ (print . pretty) es
+  where
+  (es, st) = runM $ do
+    _ <- toKey $ bar (execM m) (FV "world")
+    mR <- gets keyMap
+    liftM catMaybes $ mapM foof $ M.toList mR
+
+foof :: (Key, Exp) -> M (Maybe CExpr)
 foof (x,y@EApp{}) = do
   e <- toCExpr y
   return $ Just $ CAssign CAssignOp (cvar $ "k" ++ show x) e un
 foof _ = return Nothing
-  
+
 ccode :: M () -> IO ()
 -- ccode = writeFile "gen.c" . show . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
 ccode = print . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
@@ -175,11 +183,47 @@ data World
 -- print :: E a -> (World -> World)
 -- alloc :: E Word -> E (Ref a) -> (World -> World)
 
+foo :: Stmt -> E World -> E World
+foo x y = case x of
+  Print a -> binop "printf" a y
+  Alloc a b -> ternop "alloc" a b y
+  Store a b -> ternop "store" a b y
+  While a b -> undefined
+
+bar :: Block -> E World -> E World
+bar (Block xs) y = foldl' (flip foo) y xs
+  
 data Stmt where
   While :: E Bool -> Block -> Stmt
   Store :: E (Ref a) -> E a -> Stmt
   Print :: E a -> Stmt
   Alloc :: Typed a => E Word -> E (Ref a) -> Stmt
+
+while :: E Bool -> M () -> M ()
+while x y = do
+  pushBlock
+  y
+  ss <- popBlock
+  stmt $ While x $ mkBlock ss
+
+infix 4 .=
+(.=) :: E (Ref a) -> E a -> M ()
+(.=) x y = stmt $ Store x y
+    
+printf :: E a -> M ()
+printf x = stmt $ Print x
+
+alloc :: Typed a => E Word -> M (E (Ref a))
+alloc sz = do
+  i <- gets unique
+  modify $ \st -> st{ unique = succ i }
+  let v = BV i
+  stmt $ Alloc sz v
+  return v
+
+stmt s = do
+  ss:bs <- gets stmts
+  modify $ \st -> st{ stmts = (s:ss):bs }
 
 toKey :: E a -> M Key
 toKey x = case x of
@@ -261,14 +305,6 @@ infixl 8 ##
 instance (Typed a, Count b) => Typed (Array a b) where
   typeof _ = TArray (typeof (unused :: E (Ref a))) (countof (unused :: b))
 
-alloc :: Typed a => E Word -> M (E (Ref a))
-alloc sz = do
-  i <- gets unique
-  modify $ \st -> st{ unique = succ i }
-  let v = BV i
-  stmt $ Alloc sz v
-  return v
-
 instance Typed Double where typeof _ = TName "double"
 instance Typed Word where typeof _ = TName "uint32_t"
                            
@@ -286,17 +322,6 @@ popBlock = do
   b:bs <- gets stmts
   modify $ \st -> st{ stmts = bs }
   return b
-
-stmt s = do
-  ss:bs <- gets stmts
-  modify $ \st -> st{ stmts = (s:ss):bs }
-
-while :: E Bool -> M () -> M ()
-while x y = do
-  pushBlock
-  y
-  ss <- popBlock
-  stmt $ While x $ mkBlock ss
 
 newtype Block =  Block [Stmt]
 
@@ -343,13 +368,6 @@ cblock (Block xs) = CCompound [] (map cstat xs) un
 
 mkBlock :: [Stmt] -> Block
 mkBlock = Block . reverse
-    
-printf :: E a -> M ()
-printf x = stmt $ Print x
-
-infix 4 .=
-(.=) :: E (Ref a) -> E a -> M ()
-(.=) x y = stmt $ Store x y
 
 infix 4 <.
 (<.) :: Ord a => E a -> E a -> E Bool
@@ -408,7 +426,12 @@ data Array a b
 
 type M a = State St a
 
-data St = St{ unique :: Word, stmts :: [[Stmt]], expMap :: M.HashMap Exp Word, keyMap :: M.HashMap Word Exp } deriving Show
+data St = St
+  { unique :: Word
+  , stmts :: [[Stmt]]
+  , expMap :: M.HashMap Exp Word -- BAL: should be in separate monad state -- BAL: bimap?
+  , keyMap :: M.HashMap Word Exp -- BAL: should be in separate monad state -- BAL: bimap?
+  } deriving Show
 
 initSt :: St
 initSt = St 0 [[]] M.empty M.empty
@@ -504,6 +527,9 @@ unop v = App (FV v)
 
 binop :: String -> E a -> E b -> E c
 binop v a b = App (unop v a) b
+
+ternop :: String -> E a -> E b -> E c -> E d
+ternop v a b c = App (binop v a b) c
 
 binopE :: String -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> E a -> E a -> E a
 binopE v f g x y = case (x,y) of
