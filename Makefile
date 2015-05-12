@@ -5,7 +5,7 @@ all : nbody.out main.out
 	ls -al *.exe
 
 %.out : %.exe
-	./$< 1 > $@
+	./$< 100 > $@
 
 nbody.exe : nbody.c
 	${GCC}

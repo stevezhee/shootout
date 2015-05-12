@@ -7,7 +7,7 @@ module NBody where
 -- import           Data.IntMap hiding (lookup, map, adjust)
 -- import Language.C
 -- import Language.C.Syntax
-import           Control.Applicative
+import           Control.Applicative hiding (Const)
 import           Control.Exception
 import           Control.Monad.State
 import           Data.Generics hiding (Generic)
@@ -22,6 +22,145 @@ import qualified Data.HashMap.Strict as M
 import qualified Language.C.DSL as C
 
 undef = error . (++) "undefined:"
+
+data AExp
+  = Reg Register
+  | Const Constant
+    deriving Show
+
+data CExp
+  = Apply Address [AExp]
+    deriving Show
+
+data Constant
+  = CInt Integer
+  | CRat Rational
+    deriving Show
+             
+newtype Address = Address String deriving (Show, Eq, Generic)
+instance Hashable Address
+
+newtype Register = Register Integer deriving Show
+newtype Label = Label Integer deriving (Show, Eq, Generic)
+
+instance Hashable Label
+
+data Exp
+  = EConst Constant
+  | EApply Address [Exp]
+  | EAddr Address
+    deriving Show
+
+data Stmt
+  = Store Address Exp
+  | While Exp [Stmt]
+  | Print Exp
+  deriving Show
+             
+data Instr
+  = ILoad Register Address
+  | IStore Address AExp
+  | IPrint AExp
+  | ILet Register CExp
+  deriving Show
+    
+data Control
+  = Jump Label
+  | Cond Register Label Label
+    deriving Show
+
+data St = St
+  { nextRegister :: Register
+  , nextLabel :: Label
+  , addrMap :: M.HashMap Address AExp
+  , currentLabel :: Label
+  , currentInstrs :: [Instr]
+  , blockMap :: M.HashMap Label ([Instr], Control)
+  }
+
+foo :: Stmt -> M ()
+foo x = case x of
+  Store a b -> do
+    e <- toAExp b
+    -- BAL: don't do store if lookup reveals value is already set to the correct value
+    modify $ \st -> st{ addrMap = M.insert a e $ addrMap st }
+    instr $ IStore a e
+  Print a -> IPrint <$> toAExp a >>= instr
+  While a bs -> do
+    prev <- gets currentLabel
+    cond <- newLabel
+    body <- newLabel
+    done <- newLabel
+    newBlock (Jump cond) cond [prev, body]
+    -- BAL: don't do a new block if cond exp is a constant
+    Reg r <- toAExp a
+    newBlock (Cond r body done) body [cond]
+    mapM_ foo bs
+    newBlock (Jump cond) done [cond]
+
+newLabel = do
+  next@(Label i) <- gets nextLabel
+  modify $ \st -> st{ nextLabel = Label $ succ i }
+  return next
+
+newBlock :: Control -> Label -> [Label] -> M ()
+newBlock x y zs = do
+  modify $ \st ->
+    st{ blockMap =
+           M.insert (currentLabel st) (reverse $ currentInstrs st, x) $
+           blockMap st
+      , currentInstrs = []
+      , currentLabel = y
+      }
+
+newRegister :: M Register
+newRegister = do
+  next@(Register i) <- gets nextRegister
+  modify $ \st -> st{ nextRegister = Register $ succ i }
+  return next
+
+instr :: Instr -> M ()
+instr x = modify $ \st -> st{ currentInstrs = x : currentInstrs st }
+
+toAExp :: Exp -> M AExp
+toAExp x = case x of
+  EConst a -> return $ Const a
+  EAddr a -> do
+    m <- gets addrMap
+    case M.lookup a m of
+      Nothing -> do
+        r <- newRegister
+        instr $ ILoad r a
+        let e = Reg r
+        modify $ \st -> st{ addrMap = M.insert a e m }
+        return e
+      Just a -> return a
+  EApply a bs -> do
+    bs' <- mapM toAExp bs
+    r <- newRegister
+    instr $ ILet r $ Apply a bs'
+    return $ Reg r
+    
+type M a = State St a
+
+program =
+  [ Store n $ int 10
+  , While (EApply (Address "gt") [EAddr n, int 0])
+    [ Print $ EAddr n
+    , Store n $ EApply (Address "sub") [EAddr n, int 1]
+    ]
+  ]
+  where
+    n = Address "n"
+    int = EConst . CInt
+          
+-- start:
+--   n := 10
+--   while n > 0
+--     print n
+--     n = n - 1
+        
+{-
 {- The Computer Language Benchmarks Game
    http://benchmarksgame.alioth.debian.org/
   
@@ -798,3 +937,4 @@ main_ = do
 -- -0.169075164
 -- -0.169059907
 -- */
+-}
