@@ -6,4 +6,6 @@ dist/
 *.stackdump
 *~
 *.out
-
+*.o
+*.hi
+TAGS

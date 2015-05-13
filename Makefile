@@ -17,4 +17,4 @@ main.exe : main.c gen.c
 	${GCC}
 
 clean :
-	rm -f *.out *.exe *.stackdump gen.c
+	rm -f *.out *.exe *.stackdump *.o *.hi gen.c

@@ -9,7 +9,7 @@
 
 module NBody
   ( main, t, debug_print
-  , (>.), (<.), (>=.), (<=.), (==.), (/=.)
+  , (>.), (<.), (>=.), (<=.), (==.), (/=.), (+=)
   ) where
 
 -- import           Data.IntMap hiding (lookup, map, adjust)
@@ -79,15 +79,6 @@ data Control
   | Cond Register Label Label
   | Exit
     deriving Show
-
-data St = St
-  { nextRegister :: Register
-  , nextLabel :: Label
-  , addrMap :: M.HashMap Address AExp
-  , currentLabel :: Label
-  , currentInstrs :: [Instr]
-  , blockMap :: M.HashMap Label ([Instr], Control) -- BAL: add prev labels for llvm comment?
-  }
 
 ppBlock (lbl, (instrs, ctrl)) = vcat $ map text $ [show lbl] ++ map show instrs ++ [show ctrl]
 
@@ -261,8 +252,8 @@ cvar x = CVar (cident x) un
 
 cident = internalIdent
 
-cbvar :: Word -> String
-cbvar a = "v" ++ show a
+cbvar :: BVar -> String
+cbvar (BVar a) = "v" ++ show a
 
 cexpr :: E a -> CExpr
 cexpr (x :: E a) = case x of
@@ -328,23 +319,19 @@ cexpr (x :: E a) = case x of
 
 ccode :: M () -> IO ()
 -- ccode = writeFile "gen.c" . show . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
-ccode m = print $ pretty $ everywhere (mkT elimCAdrOp) $ ccompound $ map bvcstat bvs ++ map cstat ss
+ccode m = print $ pretty $ everywhere (mkT elimCAdrOp) $ ccompound $ map bvarcstat bvs ++ map cstat ss
   where
     (bvs, ss) = execM m
 
 ccompound :: [CBlockItem] -> CStat
 ccompound xs = CCompound [] xs un
 
-cblock :: Block -> CStat
-cblock (Block xs) = ccompound $ map cstat xs
-
 sortByFst = sortBy (\a b -> compare (fst a) (fst b))
 
-execM :: M () -> ([(Word, Type)], [Stmt])
-execM x = (sortByFst $ bvs st, reverse b)
+execM :: M () -> ([(BVar, Type)], [Stmt])
+execM x = (sortByFst $ bvars st, ss)
   where
-    [b] = stmts st
-    st = execState x initSt
+    (ss, st) = runState (x >> popBlock) initSt
 
 cbinary o a b = CBinary o a b un
   
@@ -374,25 +361,65 @@ cexprs x = case x of
   _ -> [cexpr x]
 
 data E a where
-  BV :: Typed a => Word -> E (Ref a)
+  BV :: Typed a => BVar -> E (Ref a)
   FV :: String -> E a
   I :: (Num a, Show a, CNum a) => Integer -> E a
   R :: (Show a, Fractional a, CFractional a) => Rational -> E a
   App :: E (b -> a) -> E b -> E a
+  
+data Stmt where
+  While :: E Bool -> Block -> Stmt
+  Store :: E (Ref a) -> E a -> Stmt
+  Print :: E a -> Stmt
 
-type Key = Word
+newtype Block = Block [Stmt]
 
-data Exp
-  = EBV Word Type
-  | EFV String
-  | EI Integer
-  | ER Rational
-  | EApp [Key]
-  | EIf Key Key Key
-    deriving (Show, Eq, Generic, Ord)
-
-instance Hashable Exp
+data Type
+  = TName String
+  | TArray Type Word
+  deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
+  
+data Ref a
+data Array a b
+
+type M a = State St a
+
+newtype BVar = BVar Integer deriving  (Show, Eq, Generic, Ord)
+newtype Register = Register Integer deriving  (Show, Eq, Generic, Ord)
+newtype Label = Label Integer deriving (Show, Eq, Generic, Ord)
+
+data St = St
+  { nextBVar :: BVar
+  , stmts :: [[Stmt]]
+  , bvars :: [(BVar, Type)]
+  -- , expMap :: M.HashMap Exp Word -- BAL: should be in separate monad state -- BAL: bimap?
+  -- , keyMap :: M.HashMap Word Exp -- BAL: should be in separate monad state -- BAL: bimap?
+  } deriving Show
+
+initSt :: St
+initSt = St (BVar 0) [[]] [] -- M.empty M.empty
+
+-- data BSt = BSt
+--   { nextRegister :: Register
+--   , nextLabel :: Label
+--   , addrMap :: M.HashMap Address AExp
+--   , currentLabel :: Label
+--   , currentInstrs :: [Instr]
+--   , blockMap :: M.HashMap Label ([Instr], Control) -- BAL: add prev labels for llvm comment?
+--   }
+
+-- type Key = Word
+
+-- data Exp
+--   = EBV Word Type
+--   | EFV String
+--   | EI Integer
+--   | ER Rational
+--   | EApp [Key]
+--   | EIf Key Key Key
+--     deriving (Show, Eq, Generic, Ord)
+-- instance Hashable Exp
 
 -- data World
   
@@ -410,21 +437,13 @@ instance Hashable Type
 
 -- bar :: Block -> E World -> E World
 -- bar (Block xs) y = foldl' (flip foo) y xs
-  
-data Stmt where
-  While :: E Bool -> Block -> Stmt
-  Store :: E (Ref a) -> E a -> Stmt
-  Print :: E a -> Stmt
 
 while :: E Bool -> M () -> M ()
 while x y = do
   pushBlock
   y
   ss <- popBlock
-  stmt $ While x $ mkBlock ss
-
-mkBlock :: [Stmt] -> Block
-mkBlock = Block . reverse
+  stmt $ While x $ Block ss
 
 infix 4 .=
 (.=) :: E (Ref a) -> E a -> M ()
@@ -433,11 +452,11 @@ infix 4 .=
 printf :: E a -> M ()
 printf x = stmt $ Print x
 
-alloc :: Typed a => E Word -> M (E (Ref a))
-alloc sz = do
-  i <- gets unique
-  let v = BV i
-  modify $ \st -> st{ unique = succ i, bvs = (i, typeof v) : bvs st }
+alloc :: Typed a => M (E (Ref a))
+alloc = do
+  bv@(BVar i) <- gets nextBVar
+  let v = BV bv
+  modify $ \st -> st{ nextBVar = BVar $ succ i, bvars = (bv, typeof v) : bvars st }
   return v
 
 stmt s = do
@@ -527,8 +546,10 @@ instance (Typed a, Count b) => Typed (Array a b) where
 instance Typed Double where typeof _ = TName "double"
 instance Typed Word where typeof _ = TName "uint32_t"
                            
-mk :: Typed a => E a -> M (E (Ref a))
-mk x = alloc 1 >>= \p -> p .= x >> return p
+global = FV
+
+new :: Typed a => E a -> M (E (Ref a))
+new x = alloc >>= \p -> p .= x >> return p
 
 ix :: E (Ref (Array a b)) -> E Word -> E (Ref a)
 ix = binop "ix"
@@ -540,9 +561,7 @@ pushBlock = modify $ \st -> st{ stmts = [] : stmts st }
 popBlock = do
   b:bs <- gets stmts
   modify $ \st -> st{ stmts = bs }
-  return b
-
-newtype Block =  Block [Stmt]
+  return $ reverse b
 
 -- CStat
 -- CBlockItem
@@ -564,20 +583,15 @@ cestmt x = CBlockStmt $ CExpr (Just x) un
 cstring x = CConst $ CStrConst (CString x False) un
 
 class Typed a where typeof :: E (Ref a) -> Type
-
-data Type
-  = TName String
-  | TArray Type Word
-  deriving (Show, Eq, Ord, Generic)
            
 cstat :: Stmt -> CBlockItem
 cstat x = case x of
-  While a b -> CBlockStmt $ CWhile (cexpr a) (cblock b) False un
+  While a (Block b) -> CBlockStmt $ CWhile (cexpr a) (ccompound $ map cstat b) False un
   Store a b -> cestmt $ CAssign CAssignOp (cload $ cexpr a) (cexpr b) un
   Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cexpr a] un -- BAL: do based on type
 
-bvcstat :: (Word, Type) -> CBlockItem
-bvcstat (b, ty) = case ty of
+bvarcstat :: (BVar, Type) -> CBlockItem
+bvarcstat (b, ty) = case ty of
   TArray (TName t) n -> cdecl t [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un]
   TName t -> cdecl t []
   _ -> undef "cstat:TArray"
@@ -620,7 +634,7 @@ eachN i arr f = loopNM i (count arr) $ \i -> f (ix arr i) i
 
 loopNM :: E Word -> E Word -> (E Word -> M ()) -> M ()
 loopNM x y f = do
-  i <- mk x
+  i <- new x
   while (load i <. y) $ do
     f $ load i
     inc i
@@ -636,22 +650,6 @@ infix 4 -=
 (-=) = adjust (-)
 
 adjust f x y = x .= f (load x) y
-  
-data Ref a
-data Array a b
-
-type M a = State St a
-
-data St = St
-  { unique :: Word
-  , stmts :: [[Stmt]]
-  , bvs :: [(Word, Type)]
-  -- , expMap :: M.HashMap Exp Word -- BAL: should be in separate monad state -- BAL: bimap?
-  -- , keyMap :: M.HashMap Word Exp -- BAL: should be in separate monad state -- BAL: bimap?
-  } deriving Show
-
-initSt :: St
-initSt = St 0 [[]] [] -- M.empty M.empty
 
 infixl 9 #
 (#) :: E (Ref a) -> E (Ref a -> Ref b) -> E (Ref b)
@@ -804,7 +802,7 @@ instance (Show a, Floating a, CNum a, CFractional a) => Floating (E a) where
 
 energy :: Count b => E (Ref (Array Body b)) -> M (E Double)
 energy bodies = do
-  e <- mk 0
+  e <- new 0
   each bodies $ \b i -> do
     e += 0.5 * b##mass * ((b##vx)^2 + (b##vy)^2 + (b##vz)^2)
     eachN (i + 1) bodies $ \b2 _ -> do
@@ -836,9 +834,9 @@ t = printf $ 3 + (2 :: E Word)
 
 offset_momentum :: E (Ref (Array Body Five)) -> M ()
 offset_momentum bodies = do
-  px <- mk 0
-  py <- mk 0
-  pz <- mk 0
+  px <- new 0
+  py <- new 0
+  pz <- new 0
   each bodies $ \b _ -> do
     let f p q = p += b##q * b##mass
     f px vx
@@ -899,11 +897,11 @@ instance Typed Body where typeof _ = TName "body_t"
 
 assertM x = assert x $ return ()
 
-mkArray :: (Typed a, Count cnt) => cnt -> (E (Ref a) -> b -> M ()) -> [b] -> M (E (Ref (Array a cnt)))
-mkArray cnt f xs = do
+newArray :: (Typed a, Count cnt) => cnt -> (E (Ref a) -> b -> M ()) -> [b] -> M (E (Ref (Array a cnt)))
+newArray cnt f xs = do
   let n = fromIntegral $ length xs
   assertM (countof cnt == n)
-  arr <- alloc $ fromIntegral n
+  arr <- alloc
   sequence_ [ f (ix arr i) x | (x, i) <- zip xs indices ]
   return arr
 
@@ -917,7 +915,7 @@ initBody body (a, b, c, d, e, f, g) = do
   body#vz .= f * days_per_year
   body#mass .= g * solar_mass
   
-mkBodies = mkArray Five initBody
+newBodies = newArray Five initBody
   [ (0, 0, 0, 0, 0, 0, 1) {- sun -}
   , {- jupiter -}
     ( 4.84143144246472090e+00,
@@ -971,15 +969,16 @@ debug_print bodies = do
     f vz
     f mass
   energy bodies >>= printf
-  
+
+main_ :: M ()
 main_ = do
-  bodies <- mkBodies
+  bodies <- newBodies
   -- debug_print bodies
   offset_momentum bodies
   -- debug_print bodies
   let f = energy bodies >>= printf
   f
-  loop (FV "n") $ \_ -> advance bodies 0.01
+  loop (global "n") $ \_ -> advance bodies 0.01
   -- debug_print bodies
   f
   
