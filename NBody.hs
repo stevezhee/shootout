@@ -93,7 +93,7 @@ ppBlock (lbl, (instrs, ctrl)) = vcat $ map text $ [show lbl] ++ map show instrs 
 
 lastBlock = let e = undef "lastBlock" in newBlock Exit e e
 -- toBlockMap :: Program -> M.HashMap Label ([Instr], Control)
-toBlockMap prog = mapM_ (print . ppBlock) $ sortBy (\a b -> compare (fst a) (fst b)) $ M.toList $ blockMap $ execState (mapM_ stmt prog >> lastBlock) $ St (Register 0) (Label 1) M.empty (Label 0) [] M.empty
+toBlockMap prog = mapM_ (print . ppBlock) $ sortByFst $ M.toList $ blockMap $ execState (mapM_ stmt prog >> lastBlock) $ St (Register 0) (Label 1) M.empty (Label 0) [] M.empty
 
 isStore Store{} = True
 isStore _ = False
@@ -328,11 +328,27 @@ cexpr (x :: E a) = case x of
 
 ccode :: M () -> IO ()
 -- ccode = writeFile "gen.c" . show . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
-ccode = print . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
+ccode m = print $ pretty $ everywhere (mkT elimCAdrOp) $ ccompound $ map bvcstat bvs ++ map cstat ss
+  where
+    (bvs, ss) = execM m
+
+ccompound :: [CBlockItem] -> CStat
+ccompound xs = CCompound [] xs un
+
+cblock :: Block -> CStat
+cblock (Block xs) = ccompound $ map cstat xs
+
+sortByFst = sortBy (\a b -> compare (fst a) (fst b))
+
+execM :: M () -> ([(Word, Type)], [Stmt])
+execM x = (sortByFst $ bvs st, reverse b)
+  where
+    [b] = stmts st
+    st = execState x initSt
 
 cbinary o a b = CBinary o a b un
   
-cbuiltins :: [(String, [CExpression NodeInfo] -> CExpression NodeInfo)]
+cbuiltins :: [(String, [CExpr] -> CExpr)]
 cbuiltins =
   [ ("load", cunaryf cload)
   , ("+", cbinaryf $ cbinary CAddOp)
@@ -389,7 +405,6 @@ instance Hashable Type
 -- foo :: Stmt -> E World -> E World
 -- foo x y = case x of
 --   Print a -> binop "printf" a y
---   Alloc a b -> ternop "alloc" a b y
 --   Store a b -> ternop "store" a b y
 --   While a b -> undefined
 
@@ -400,7 +415,6 @@ data Stmt where
   While :: E Bool -> Block -> Stmt
   Store :: E (Ref a) -> E a -> Stmt
   Print :: E a -> Stmt
-  Alloc :: Typed a => E Word -> E (Ref a) -> Stmt
 
 while :: E Bool -> M () -> M ()
 while x y = do
@@ -408,6 +422,9 @@ while x y = do
   y
   ss <- popBlock
   stmt $ While x $ mkBlock ss
+
+mkBlock :: [Stmt] -> Block
+mkBlock = Block . reverse
 
 infix 4 .=
 (.=) :: E (Ref a) -> E a -> M ()
@@ -419,9 +436,8 @@ printf x = stmt $ Print x
 alloc :: Typed a => E Word -> M (E (Ref a))
 alloc sz = do
   i <- gets unique
-  modify $ \st -> st{ unique = succ i }
   let v = BV i
-  stmt $ Alloc sz v
+  modify $ \st -> st{ unique = succ i, bvs = (i, typeof v) : bvs st }
   return v
 
 stmt s = do
@@ -473,7 +489,6 @@ ppS x = case x of
   While a bs -> hang (text "while" <+> ppE a) 2 $ ppBlock bs
   Store a b -> hsep [ppE a, text ".=", ppE b]
   Print a -> hsep [text "print", ppE a]
-  Alloc{} -> empty
 
 instance Show Stmt where show = show . ppS
 
@@ -560,20 +575,15 @@ cstat x = case x of
   While a b -> CBlockStmt $ CWhile (cexpr a) (cblock b) False un
   Store a b -> cestmt $ CAssign CAssignOp (cload $ cexpr a) (cexpr b) un
   Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cexpr a] un -- BAL: do based on type
-  Alloc _ bv@(BV b) -> case typeof bv of
-    TArray (TName t) n -> cdecl t [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un]
-    TName t -> cdecl t []
-    _ -> undef "cstat:TArray"
-    where
-      cdecl t cs =
-         CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident t) un) (CDeclr (Just $ cident $ cbvar b) cs Nothing [] un) Nothing
-  Alloc{} -> undef "cstat:Alloc"
-    
-cblock :: Block -> CStat
-cblock (Block xs) = CCompound [] (map cstat xs) un
 
-mkBlock :: [Stmt] -> Block
-mkBlock = Block . reverse
+bvcstat :: (Word, Type) -> CBlockItem
+bvcstat (b, ty) = case ty of
+  TArray (TName t) n -> cdecl t [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un]
+  TName t -> cdecl t []
+  _ -> undef "cstat:TArray"
+  where
+    cdecl t cs =
+      CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident t) un) (CDeclr (Just $ cident $ cbvar b) cs Nothing [] un) Nothing
 
 infix 4 <.
 (<.) :: Ord a => E a -> E a -> E Bool
@@ -635,15 +645,13 @@ type M a = State St a
 data St = St
   { unique :: Word
   , stmts :: [[Stmt]]
+  , bvs :: [(Word, Type)]
   -- , expMap :: M.HashMap Exp Word -- BAL: should be in separate monad state -- BAL: bimap?
   -- , keyMap :: M.HashMap Word Exp -- BAL: should be in separate monad state -- BAL: bimap?
   } deriving Show
 
 initSt :: St
-initSt = St 0 [[]] -- M.empty M.empty
-
-execM :: M () -> Block
-execM x = let [b] = stmts $ execState x initSt in mkBlock b
+initSt = St 0 [[]] [] -- M.empty M.empty
 
 infixl 9 #
 (#) :: E (Ref a) -> E (Ref a -> Ref b) -> E (Ref b)

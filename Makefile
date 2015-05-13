@@ -11,10 +11,10 @@ nbody.exe : nbody.c
 	${GCC}
 
 gen.c : NBody.hs
-	runghc -Wall $<
+	runghc -Wall $< > $@
 
 main.exe : main.c gen.c
 	${GCC}
 
 clean :
-	rm -f *.out *.exe *.stackdump
+	rm -f *.out *.exe *.stackdump gen.c
