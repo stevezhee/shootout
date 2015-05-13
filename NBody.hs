@@ -43,7 +43,7 @@ newtype Address = Address String deriving (Show, Eq, Generic, Typeable, Data)
 instance Hashable Address
 
 newtype Register = Register Integer deriving Show
-newtype Label = Label Integer deriving (Show, Eq, Generic)
+newtype Label = Label Integer deriving (Show, Eq, Generic, Ord)
 
 instance Hashable Label
 
@@ -85,7 +85,7 @@ ppBlock (lbl, (instrs, ctrl)) = vcat $ map text $ [show lbl] ++ map show instrs 
 
 lastBlock = let e = undef "lastBlock" in newBlock Exit e e
 -- toBlockMap :: Program -> M.HashMap Label ([Instr], Control)
-toBlockMap prog = mapM_ (print . ppBlock) $ M.toList $ blockMap $ execState (mapM_ stmt prog >> lastBlock) $ St (Register 0) (Label 1) M.empty (Label 0) [] M.empty
+toBlockMap prog = mapM_ (print . ppBlock) $ sortBy (\a b -> compare (fst a) (fst b)) $ M.toList $ blockMap $ execState (mapM_ stmt prog >> lastBlock) $ St (Register 0) (Label 1) M.empty (Label 0) [] M.empty
 
 isStore Store{} = True
 isStore _ = False
@@ -182,14 +182,20 @@ type Program = [Stmt]
 
 t = toBlockMap
   [ Store n $ int 10
+  , Store m $ int 5
   , While (EApply (Address "gt") [EAddr n, int 0])
     [ Print $ EAddr n
+    , While (EApply (Address "gt") [EAddr n, int 0])
+      [ Print $ EAddr m
+      , Store m $ EApply (Address "sub") [EAddr m, int 1]
+      ]
     , Store n $ EApply (Address "sub") [EAddr n, int 1]
     ]
---  , Print $ int 42
+  , Print $ int 42
   ]
   where
     n = Address "n"
+    m = Address "m"
     int = EConst . CInt
           
 -- start:
