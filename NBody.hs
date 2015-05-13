@@ -116,7 +116,6 @@ stmt x = case x of
     prev <- gets currentLabel
     cond <- newLabel
     body <- newLabel
-    done <- newLabel
     phis <- phiNodes bs
     newBlock (Jump cond) body [cond]
     modify $ \st -> st{ addrMap = foldr (\(k, _, v) -> M.insert k $ Reg v) (addrMap st) phis }
@@ -124,6 +123,7 @@ stmt x = case x of
     newBlock (Jump cond) cond [prev, body]
     gets addrMap >>= \m -> mapM_ (phiInstr m prev body) phis
     Reg r <- toAExp a
+    done <- newLabel
     newBlock (Cond r body done) done [cond]
 
 
@@ -197,7 +197,19 @@ t = toBlockMap
     n = Address "n"
     m = Address "m"
     int = EConst . CInt
-          
+
+tt = toBlockMap
+  [ Store n $ int 10
+  , While (EApply (Address "gt") [EAddr n, int 0])
+    [ Print $ EAddr n
+    , Store n $ EApply (Address "sub") [EAddr n, int 1]
+    ]
+  , Print $ int 42
+  ]
+  where
+    n = Address "n"
+    int = EConst . CInt
+
 -- start:
 --   n := 10
 --   while n > 0
