@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -30,14 +31,15 @@ data AExp
 
 data CExp
   = Apply Address [AExp]
+  | Phi [(AExp, Label)]
     deriving Show
 
 data Constant
   = CInt Integer
   | CRat Rational
-    deriving Show
+  deriving (Show, Typeable, Data)
              
-newtype Address = Address String deriving (Show, Eq, Generic)
+newtype Address = Address String deriving (Show, Eq, Generic, Typeable, Data)
 instance Hashable Address
 
 newtype Register = Register Integer deriving Show
@@ -49,14 +51,14 @@ data Exp
   = EConst Constant
   | EApply Address [Exp]
   | EAddr Address
-    deriving Show
+  deriving (Show, Typeable, Data)
 
 data Stmt
   = Store Address Exp
   | While Exp [Stmt]
   | Print Exp
-  deriving Show
-             
+  deriving (Show, Typeable, Data)
+
 data Instr
   = ILoad Register Address
   | IStore Address AExp
@@ -67,6 +69,7 @@ data Instr
 data Control
   = Jump Label
   | Cond Register Label Label
+  | Exit
     deriving Show
 
 data St = St
@@ -75,11 +78,33 @@ data St = St
   , addrMap :: M.HashMap Address AExp
   , currentLabel :: Label
   , currentInstrs :: [Instr]
-  , blockMap :: M.HashMap Label ([Instr], Control)
+  , blockMap :: M.HashMap Label ([Instr], Control) -- BAL: add prev labels for llvm comment?
   }
 
-foo :: Stmt -> M ()
-foo x = case x of
+ppBlock (lbl, (instrs, ctrl)) = vcat $ map text $ [show lbl] ++ map show instrs ++ [show ctrl]
+
+lastBlock = let e = undef "lastBlock" in newBlock Exit e e
+-- toBlockMap :: Program -> M.HashMap Label ([Instr], Control)
+toBlockMap prog = mapM_ (print . ppBlock) $ M.toList $ blockMap $ execState (mapM_ stmt prog >> lastBlock) $ St (Register 0) (Label 1) M.empty (Label 0) [] M.empty
+
+isStore Store{} = True
+isStore _ = False
+
+phiNodes :: [Stmt] -> M [(Address, AExp, Register)]
+phiNodes xs = do
+  m <- gets addrMap
+  let ks = nub [ a | Store a _ <- listify isStore xs ]
+  let
+    f :: Address -> M (Maybe (Address, AExp, Register))
+    f a = case M.lookup a m of
+      Nothing -> return Nothing
+      Just e -> do
+        r <- newRegister
+        return $ Just (a, e, r)
+  catMaybes <$> mapM f ks
+  
+stmt :: Stmt -> M ()
+stmt x = case x of
   Store a b -> do
     e <- toAExp b
     -- BAL: don't do store if lookup reveals value is already set to the correct value
@@ -87,16 +112,26 @@ foo x = case x of
     instr $ IStore a e
   Print a -> IPrint <$> toAExp a >>= instr
   While a bs -> do
+    -- BAL: don't do a new block if cond exp is a constant
     prev <- gets currentLabel
     cond <- newLabel
     body <- newLabel
     done <- newLabel
+    phis <- phiNodes bs
+    newBlock (Jump cond) body [cond]
+    modify $ \st -> st{ addrMap = foldr (\(k, _, v) -> M.insert k $ Reg v) (addrMap st) phis }
+    mapM_ stmt bs
     newBlock (Jump cond) cond [prev, body]
-    -- BAL: don't do a new block if cond exp is a constant
+    gets addrMap >>= \m -> mapM_ (phiInstr m prev body) phis
     Reg r <- toAExp a
-    newBlock (Cond r body done) body [cond]
-    mapM_ foo bs
-    newBlock (Jump cond) done [cond]
+    newBlock (Cond r body done) done [cond]
+
+
+phiInstr m lbl0 lbl1 (a, e0, r) = case M.lookup a m of
+  Nothing -> undef "phiInstr"
+  Just e1 -> do
+    modify $ \st -> st{ addrMap = M.insert a (Reg r) $ addrMap st }
+    instr $ ILet r $ Phi [(e0, lbl0), (e1, lbl1)]
 
 newLabel = do
   next@(Label i) <- gets nextLabel
@@ -143,12 +178,15 @@ toAExp x = case x of
     
 type M a = State St a
 
-program =
+type Program = [Stmt]
+
+t = toBlockMap
   [ Store n $ int 10
   , While (EApply (Address "gt") [EAddr n, int 0])
     [ Print $ EAddr n
     , Store n $ EApply (Address "sub") [EAddr n, int 1]
     ]
+--  , Print $ int 42
   ]
   where
     n = Address "n"
