@@ -182,9 +182,9 @@ type Program = [Stmt]
 
 t = toBlockMap
   [ Store n $ int 10
-  , Store m $ int 5
   , While (EApply (Address "gt") [EAddr n, int 0])
     [ Print $ EAddr n
+    , Store m $ int 5
     , While (EApply (Address "gt") [EAddr n, int 0])
       [ Print $ EAddr m
       , Store m $ EApply (Address "sub") [EAddr m, int 1]
@@ -215,7 +215,7 @@ tt = toBlockMap
 --   while n > 0
 --     print n
 --     n = n - 1
-        
+
 {-
 {- The Computer Language Benchmarks Game
    http://benchmarksgame.alioth.debian.org/
