@@ -1,17 +1,25 @@
+{-# OPTIONS -fno-warn-missing-signatures #-}
+{-# OPTIONS -fno-warn-name-shadowing #-}
+{-# OPTIONS -fno-warn-type-defaults #-}
+{-# OPTIONS -fno-warn-unused-imports #-}
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
-module NBody where
+module NBody
+  ( main, t, debug_print
+  , (>.), (<.), (>=.), (<=.), (==.), (/=.)
+  ) where
 
 -- import           Data.IntMap hiding (lookup, map, adjust)
 -- import Language.C
 -- import Language.C.Syntax
-import           Control.Applicative hiding (Const)
+
+import           Control.Applicative hiding (Const, empty)
 import           Control.Exception
 import           Control.Monad.State
-import           Data.Generics hiding (Generic)
+import           Data.Generics hiding (Generic, empty)
 import           Data.Hashable
 import           Data.List
 import           Data.Maybe
@@ -23,7 +31,7 @@ import qualified Data.HashMap.Strict as M
 import qualified Language.C.DSL as C
 
 undef = error . (++) "undefined:"
-
+{-
 data AExp
   = Reg Register
   | Const Constant
@@ -216,7 +224,7 @@ tt = toBlockMap
 --     print n
 --     n = n - 1
 
-{-
+-}
 {- The Computer Language Benchmarks Game
    http://benchmarksgame.alioth.debian.org/
   
@@ -274,49 +282,49 @@ cexpr (x :: E a) = case x of
       a@(CVar v _) : bs = cexprs x
       s = identToString v
 
-toCExpr :: Exp -> M CExpr
-toCExpr x = case x of
-  EI a -> return $ cnum (unused :: Word) a -- BAL: handle polymorphism
-  ER a -> return $ cfractional (unused :: Double) a -- BAL: handle polymorphism
-  EFV a -> return $ cvar a
-  EBV a t -> return $ f $ cvar $ cbvar a
-    where
-      f = case t of
-        TName{} -> caddrof
-        TArray{} -> id
-  EApp us -> do
-    a@(CVar v _) : bs <- mapM toCExprArg us
-    let s = identToString v
-    return $ case (s, lookup s cbuiltins) of
-      ('.':fld, _) -> cunaryf (cfield fld) bs
-      (_, Just f) -> f bs
-      _ -> a C.# bs
+-- toCExpr :: Exp -> M CExpr
+-- toCExpr x = case x of
+--   EI a -> return $ cnum (unused :: Word) a -- BAL: handle polymorphism
+--   ER a -> return $ cfractional (unused :: Double) a -- BAL: handle polymorphism
+--   EFV a -> return $ cvar a
+--   EBV a t -> return $ f $ cvar $ cbvar a
+--     where
+--       f = case t of
+--         TName{} -> caddrof
+--         TArray{} -> id
+--   EApp us -> do
+--     a@(CVar v _) : bs <- mapM toCExprArg us
+--     let s = identToString v
+--     return $ case (s, lookup s cbuiltins) of
+--       ('.':fld, _) -> cunaryf (cfield fld) bs
+--       (_, Just f) -> f bs
+--       _ -> a C.# bs
 
-toCExprArg :: Key -> M CExpr
-toCExprArg k = do
-  mR <- gets keyMap
-  case M.lookup k mR of
-    Nothing -> undef "toCExprArg"
-    Just a -> case a of
-      EApp{} -> return $ cvar $ "k" ++ show k -- BAL: fixme
-      _ -> toCExpr a
+-- toCExprArg :: Key -> M CExpr
+-- toCExprArg k = do
+--   mR <- gets keyMap
+--   case M.lookup k mR of
+--     Nothing -> undef "toCExprArg"
+--     Just a -> case a of
+--       EApp{} -> return $ cvar $ "k" ++ show k -- BAL: fixme
+--       _ -> toCExpr a
 
-runM :: M a -> (a, St)
-runM = flip runState initSt
+-- runM :: M a -> (a, St)
+-- runM = flip runState initSt
 
-baz :: M () -> IO ()
-baz m = mapM_ (print . pretty) es
-  where
-  (es, st) = runM $ do
-    _ <- toKey $ bar (execM m) (FV "world")
-    mR <- gets keyMap
-    liftM catMaybes $ mapM foof $ M.toList mR
+-- baz :: M () -> IO ()
+-- baz m = mapM_ (print . pretty) es
+--   where
+--   (es, st) = runM $ do
+--     _ <- toKey $ bar (execM m) (FV "world")
+--     mR <- gets keyMap
+--     liftM catMaybes $ mapM foof $ M.toList mR
 
-foof :: (Key, Exp) -> M (Maybe CExpr)
-foof (x,y@EApp{}) = do
-  e <- toCExpr y
-  return $ Just $ CAssign CAssignOp (cvar $ "k" ++ show x) e un
-foof _ = return Nothing
+-- foof :: (Key, Exp) -> M (Maybe CExpr)
+-- foof (x,y@EApp{}) = do
+--   e <- toCExpr y
+--   return $ Just $ CAssign CAssignOp (cvar $ "k" ++ show x) e un
+-- foof _ = return Nothing
 
 ccode :: M () -> IO ()
 -- ccode = writeFile "gen.c" . show . pretty . everywhere (mkT elimCAdrOp) . cblock . execM
@@ -370,7 +378,7 @@ data Exp
 instance Hashable Exp
 instance Hashable Type
 
-data World
+-- data World
   
 -- while = \x y z -> if x then (y (while x y z)) else z
 -- while :: E Bool -> ((World -> World) -> (World -> World)) -> (World -> World) -> (World -> World)
@@ -378,15 +386,15 @@ data World
 -- print :: E a -> (World -> World)
 -- alloc :: E Word -> E (Ref a) -> (World -> World)
 
-foo :: Stmt -> E World -> E World
-foo x y = case x of
-  Print a -> binop "printf" a y
-  Alloc a b -> ternop "alloc" a b y
-  Store a b -> ternop "store" a b y
-  While a b -> undefined
+-- foo :: Stmt -> E World -> E World
+-- foo x y = case x of
+--   Print a -> binop "printf" a y
+--   Alloc a b -> ternop "alloc" a b y
+--   Store a b -> ternop "store" a b y
+--   While a b -> undefined
 
-bar :: Block -> E World -> E World
-bar (Block xs) y = foldl' (flip foo) y xs
+-- bar :: Block -> E World -> E World
+-- bar (Block xs) y = foldl' (flip foo) y xs
   
 data Stmt where
   While :: E Bool -> Block -> Stmt
@@ -420,31 +428,31 @@ stmt s = do
   ss:bs <- gets stmts
   modify $ \st -> st{ stmts = (s:ss):bs }
 
-toKey :: E a -> M Key
-toKey x = case x of
-  BV a -> nameExp $ EBV a $ typeof x
-  FV a -> nameExp $ EFV a
-  I a -> nameExp $ EI a
-  R a -> nameExp $ ER a
-  App{} -> liftM EApp (toKeys x) >>= nameExp
+-- toKey :: E a -> M Key
+-- toKey x = case x of
+--   BV a -> nameExp $ EBV a $ typeof x
+--   FV a -> nameExp $ EFV a
+--   I a -> nameExp $ EI a
+--   R a -> nameExp $ ER a
+--   App{} -> liftM EApp (toKeys x) >>= nameExp
 
-toKeys :: E a -> M [Key]
-toKeys x = case x of
-  App a b -> do
-    k <- toKey b
-    ks <- toKeys a
-    return $ ks ++ [k]
-  _ -> toKey x >>= \k -> return [k]
+-- toKeys :: E a -> M [Key]
+-- toKeys x = case x of
+--   App a b -> do
+--     k <- toKey b
+--     ks <- toKeys a
+--     return $ ks ++ [k]
+--   _ -> toKey x >>= \k -> return [k]
 
-nameExp :: Exp -> M Key
-nameExp k = do
-  m <- gets expMap
-  case M.lookup k m of
-    Nothing -> do
-      i <- gets unique
-      modify $ \st -> st{ unique = succ i, expMap = M.insert k i m, keyMap = M.insert i k $ keyMap st }
-      return i
-    Just v -> return v
+-- nameExp :: Exp -> M Key
+-- nameExp k = do
+--   m <- gets expMap
+--   case M.lookup k m of
+--     Nothing -> do
+--       i <- gets unique
+--       modify $ \st -> st{ unique = succ i, expMap = M.insert k i m, keyMap = M.insert i k $ keyMap st }
+--       return i
+--     Just v -> return v
              
 ppE :: E a -> Doc
 ppE (x :: E a) = case x of
@@ -465,6 +473,7 @@ ppS x = case x of
   While a bs -> hang (text "while" <+> ppE a) 2 $ ppBlock bs
   Store a b -> hsep [ppE a, text ".=", ppE b]
   Print a -> hsep [text "print", ppE a]
+  Alloc{} -> empty
 
 instance Show Stmt where show = show . ppS
 
@@ -551,12 +560,14 @@ cstat x = case x of
   While a b -> CBlockStmt $ CWhile (cexpr a) (cblock b) False un
   Store a b -> cestmt $ CAssign CAssignOp (cload $ cexpr a) (cexpr b) un
   Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cexpr a] un -- BAL: do based on type
-  Alloc a bv@(BV b) -> case typeof bv of
+  Alloc _ bv@(BV b) -> case typeof bv of
     TArray (TName t) n -> cdecl t [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un]
     TName t -> cdecl t []
+    _ -> undef "cstat:TArray"
     where
       cdecl t cs =
          CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident t) un) (CDeclr (Just $ cident $ cbvar b) cs Nothing [] un) Nothing
+  Alloc{} -> undef "cstat:Alloc"
     
 cblock :: Block -> CStat
 cblock (Block xs) = CCompound [] (map cstat xs) un
@@ -624,12 +635,12 @@ type M a = State St a
 data St = St
   { unique :: Word
   , stmts :: [[Stmt]]
-  , expMap :: M.HashMap Exp Word -- BAL: should be in separate monad state -- BAL: bimap?
-  , keyMap :: M.HashMap Word Exp -- BAL: should be in separate monad state -- BAL: bimap?
+  -- , expMap :: M.HashMap Exp Word -- BAL: should be in separate monad state -- BAL: bimap?
+  -- , keyMap :: M.HashMap Word Exp -- BAL: should be in separate monad state -- BAL: bimap?
   } deriving Show
 
 initSt :: St
-initSt = St 0 [[]] M.empty M.empty
+initSt = St 0 [[]] -- M.empty M.empty
 
 execM :: M () -> Block
 execM x = let [b] = stmts $ execState x initSt in mkBlock b
@@ -723,11 +734,11 @@ unop v = App (FV v)
 binop :: String -> E a -> E b -> E c
 binop v a b = App (unop v a) b
 
-ternop :: String -> E a -> E b -> E c -> E d
-ternop v a b c = App (binop v a b) c
+-- ternop :: String -> E a -> E b -> E c -> E d
+-- ternop v a b c = App (binop v a b) c
 
 binopE :: String -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> E a -> E a -> E a
-binopE v f g x y = case (x,y) of
+binopE v _f _g x y = case (x,y) of
   -- (R a, R b) -> R $ f a b
   -- (I a, I b) -> I $ g a b
   -- (I a, R _) -> binopE v f g (R $ fromIntegral a) y
@@ -993,4 +1004,3 @@ main_ = do
 -- -0.169075164
 -- -0.169059907
 -- */
--}
