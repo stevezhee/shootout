@@ -25,22 +25,13 @@ import           Data.List
 import           Data.Maybe
 import           Data.Word
 import           GHC.Generics (Generic)
-import           Language.C.DSL hiding ((#), (.=), for, while)
+import           Language.C.DSL hiding ((#), (.=), for, while, var)
 import           Text.PrettyPrint
 import qualified Data.HashMap.Strict as M
 import qualified Language.C.DSL as C
 
 undef = error . (++) "undefined:"
 {-
-data AExp
-  = Reg Register
-  | Const Constant
-    deriving Show
-
-data CExp
-  = Apply Address [AExp]
-  | Phi [(AExp, Label)]
-    deriving Show
 
 data Constant
   = CInt Integer
@@ -53,7 +44,6 @@ instance Hashable Address
 newtype Register = Register Integer deriving Show
 newtype Label = Label Integer deriving (Show, Eq, Generic, Ord)
 
-instance Hashable Label
 
 data Exp
   = EConst Constant
@@ -61,121 +51,13 @@ data Exp
   | EAddr Address
   deriving (Show, Typeable, Data)
 
-data Stmt
-  = Store Address Exp
-  | While Exp [Stmt]
-  | Print Exp
-  deriving (Show, Typeable, Data)
-
-data Instr
-  = ILoad Register Address
-  | IStore Address AExp
-  | IPrint AExp
-  | ILet Register CExp
-  deriving Show
-    
-data Control
-  = Jump Label
-  | Cond Register Label Label
-  | Exit
-    deriving Show
-
 ppBlock (lbl, (instrs, ctrl)) = vcat $ map text $ [show lbl] ++ map show instrs ++ [show ctrl]
 
-lastBlock = let e = undef "lastBlock" in newBlock Exit e e
 -- toBlockMap :: Program -> M.HashMap Label ([Instr], Control)
 toBlockMap prog = mapM_ (print . ppBlock) $ sortByFst $ M.toList $ blockMap $ execState (mapM_ stmt prog >> lastBlock) $ St (Register 0) (Label 1) M.empty (Label 0) [] M.empty
 
-isStore Store{} = True
-isStore _ = False
 
-phiNodes :: [Stmt] -> M [(Address, AExp, Register)]
-phiNodes xs = do
-  m <- gets addrMap
-  let ks = nub [ a | Store a _ <- listify isStore xs ]
-  let
-    f :: Address -> M (Maybe (Address, AExp, Register))
-    f a = case M.lookup a m of
-      Nothing -> return Nothing
-      Just e -> do
-        r <- newRegister
-        return $ Just (a, e, r)
-  catMaybes <$> mapM f ks
-  
-stmt :: Stmt -> M ()
-stmt x = case x of
-  Store a b -> do
-    e <- toAExp b
-    -- BAL: don't do store if lookup reveals value is already set to the correct value
-    modify $ \st -> st{ addrMap = M.insert a e $ addrMap st }
-    instr $ IStore a e
-  Print a -> IPrint <$> toAExp a >>= instr
-  While a bs -> do
-    -- BAL: don't do a new block if cond exp is a constant
-    prev <- gets currentLabel
-    cond <- newLabel
-    body <- newLabel
-    phis <- phiNodes bs
-    newBlock (Jump cond) body [cond]
-    modify $ \st -> st{ addrMap = foldr (\(k, _, v) -> M.insert k $ Reg v) (addrMap st) phis }
-    mapM_ stmt bs
-    newBlock (Jump cond) cond [prev, body]
-    gets addrMap >>= \m -> mapM_ (phiInstr m prev body) phis
-    Reg r <- toAExp a
-    done <- newLabel
-    newBlock (Cond r body done) done [cond]
-
-
-phiInstr m lbl0 lbl1 (a, e0, r) = case M.lookup a m of
-  Nothing -> undef "phiInstr"
-  Just e1 -> do
-    modify $ \st -> st{ addrMap = M.insert a (Reg r) $ addrMap st }
-    instr $ ILet r $ Phi [(e0, lbl0), (e1, lbl1)]
-
-newLabel = do
-  next@(Label i) <- gets nextLabel
-  modify $ \st -> st{ nextLabel = Label $ succ i }
-  return next
-
-newBlock :: Control -> Label -> [Label] -> M ()
-newBlock x y zs = do
-  modify $ \st ->
-    st{ blockMap =
-           M.insert (currentLabel st) (reverse $ currentInstrs st, x) $
-           blockMap st
-      , currentInstrs = []
-      , currentLabel = y
-      }
-
-newRegister :: M Register
-newRegister = do
-  next@(Register i) <- gets nextRegister
-  modify $ \st -> st{ nextRegister = Register $ succ i }
-  return next
-
-instr :: Instr -> M ()
-instr x = modify $ \st -> st{ currentInstrs = x : currentInstrs st }
-
-toAExp :: Exp -> M AExp
-toAExp x = case x of
-  EConst a -> return $ Const a
-  EAddr a -> do
-    m <- gets addrMap
-    case M.lookup a m of
-      Nothing -> do
-        r <- newRegister
-        instr $ ILoad r a
-        let e = Reg r
-        modify $ \st -> st{ addrMap = M.insert a e m }
-        return e
-      Just a -> return a
-  EApply a bs -> do
-    bs' <- mapM toAExp bs
-    r <- newRegister
-    instr $ ILet r $ Apply a bs'
-    return $ Reg r
     
-type M a = State St a
 
 type Program = [Stmt]
 
@@ -259,12 +141,13 @@ cexpr :: E a -> CExpr
 cexpr (x :: E a) = case x of
   I a -> cnum (unused :: a) a
   R a -> cfractional (unused :: a) a
-  FV a -> cvar a
+  FV (FVar a) -> cvar a
   BV a -> f $ cvar $ cbvar a
     where
       f = case typeof x of
         TName{} -> caddrof
         TArray{} -> id
+  Load a -> cload $ cexpr a
   App{} -> case (s, lookup s cbuiltins) of
     ('.':fld, _) -> cunaryf (cfield fld) bs
     (_, Just f) -> f bs
@@ -328,6 +211,24 @@ ccompound xs = CCompound [] xs un
 
 sortByFst = sortBy (\a b -> compare (fst a) (fst b))
 
+lastBlock :: B ()
+lastBlock = newBlock Exit (Label (-1)) []
+
+newBlock :: Control -> Label -> [Label] -> B ()
+newBlock x y zs = do
+  modify $ \st ->
+    st{ blockMap =
+           M.insert (currentLabel st) (reverse $ currentInstrs st, x) $
+           blockMap st
+      , currentInstrs = []
+      , currentLabel = y
+      }
+
+initBSt = BSt (Register 0) (Label 1) (Label 0) [] M.empty M.empty
+
+execB :: ([(BVar, Type)], [Stmt]) -> BSt
+execB (_bvs, ss) = execState (mapM_ toBBlocks ss >> lastBlock) initBSt
+
 execM :: M () -> ([(BVar, Type)], [Stmt])
 execM x = (sortByFst $ bvars st, ss)
   where
@@ -337,8 +238,7 @@ cbinary o a b = CBinary o a b un
   
 cbuiltins :: [(String, [CExpr] -> CExpr)]
 cbuiltins =
-  [ ("load", cunaryf cload)
-  , ("+", cbinaryf $ cbinary CAddOp)
+  [ ("+", cbinaryf $ cbinary CAddOp)
   , ("*", cbinaryf $ cbinary CMulOp)
   , ("-", cbinaryf $ cbinary CSubOp)
   , ("/", cbinaryf $ cbinary CDivOp)
@@ -360,18 +260,147 @@ cexprs x = case x of
   App a b -> cexprs a ++ [cexpr b]
   _ -> [cexpr x]
 
+type Var = Either BVar FVar
+
 data E a where
   BV :: Typed a => BVar -> E (Ref a)
-  FV :: String -> E a
+  FV :: FVar -> E a
   I :: (Num a, Show a, CNum a) => Integer -> E a
   R :: (Show a, Fractional a, CFractional a) => Rational -> E a
   App :: E (b -> a) -> E b -> E a
+  Load :: E (Ref a) -> E a
   
 data Stmt where
   While :: E Bool -> Block -> Stmt
   Store :: E (Ref a) -> E a -> Stmt
   Print :: E a -> Stmt
 
+data AExp
+  = Reg Register
+  | Int Integer
+  | Rat Rational
+    deriving Show
+
+var :: E a -> B Var
+var x = case x of
+  BV a -> return $ Left a
+  FV a -> return $ Right a
+  _ -> undef $ "var:" ++ show x
+
+aexp :: E a -> B AExp
+aexp x = case x of
+  I a -> return $ Int a
+  R a -> return $ Rat a
+  Load a -> do
+    v <- var a
+    m <- gets varMap
+    case M.lookup v m of
+      Nothing -> do
+        r <- newRegister
+        instr $ ILoad r v
+        let e = Reg r
+        modify $ \st -> st{ varMap = M.insert v e m }
+        return e
+      Just a -> return a
+  App{} -> do
+    (a,bs) <- aexps x
+    r <- newRegister
+    instr $ ILet r $ Call a $ reverse bs
+    return $ Reg r
+
+aexps :: E a -> B (FVar, [AExp])
+aexps x = case x of
+  FV a -> return (a, [])
+  App a b -> do
+    (a', bs) <- aexps a
+    b' <- aexp b
+    return (a', b':bs)
+  BV{} -> undef "aexps:BV"
+  I{} -> undef "aexps:I"
+  R{} -> undef "aexps:R"
+  
+newRegister :: B Register
+newRegister = do
+  next@(Register i) <- gets nextRegister
+  modify $ \st -> st{ nextRegister = Register $ succ i }
+  return next
+
+instr :: Instr -> B ()
+instr x = modify $ \st -> st{ currentInstrs = x : currentInstrs st }
+
+isStore Store{} = True
+isStore _ = False
+
+phiNodes :: [Stmt] -> B [(Var, AExp, Register)]
+phiNodes xs = do
+  m <- gets varMap
+  ks <- nub <$> sequence [ var a | Store a _ <- undefined ] -- listify isStore xs ]
+  let
+    f :: Var -> B (Maybe (Var, AExp, Register))
+    f a = case M.lookup a m of
+      Nothing -> return Nothing
+      Just e -> do
+        r <- newRegister
+        return $ Just (a, e, r)
+  catMaybes <$> mapM f ks
+
+phiInstr m lbl0 lbl1 (a, e0, r) = case M.lookup a m of
+  Nothing -> undef "phiInstr"
+  Just e1 -> do
+    modify $ \st -> st{ varMap = M.insert a (Reg r) $ varMap st }
+    instr $ ILet r $ Phi [(e0, lbl0), (e1, lbl1)]
+
+newLabel = do
+  next@(Label i) <- gets nextLabel
+  modify $ \st -> st{ nextLabel = Label $ succ i }
+  return next
+
+toBBlocks :: Stmt -> B ()
+toBBlocks x = case x of
+  Print a -> IPrint <$> aexp a >>= instr
+  Store a b -> do
+    v <- var a
+    e <- aexp b
+    -- BAL: don't do store if lookup reveals value is already set to the correct value
+    modify $ \st -> st{ varMap = M.insert v e $ varMap st }
+  --   instr $ IStore a e
+  While a (Block bs) -> do
+    -- BAL: don't do a new block if cond exp is a constant
+    prev <- gets currentLabel
+    cond <- newLabel
+    body <- newLabel
+    phis <- phiNodes bs
+    newBlock (Jump cond) body [cond]
+    modify $ \st -> st{ varMap = foldr (\(k, _, v) -> M.insert k $ Reg v) (varMap st) phis }
+    mapM_ toBBlocks bs
+    newBlock (Jump cond) cond [prev, body]
+    gets varMap >>= \m -> mapM_ (phiInstr m prev body) phis
+    Reg r <- aexp a
+    done <- newLabel
+    newBlock (Cond r body done) done [cond]
+
+t = execB $ execM $ do
+  let n = global "n"
+  let printw :: E Word -> M () = printf
+  printw 42
+  printw $ load n
+  m <- new 12
+  printw $ load m
+  m .= 13
+  printw $ load m
+  
+data CExp
+  = Call FVar [AExp]
+  | Phi [(AExp, Label)]
+    deriving Show
+
+data Instr
+  = ILet Register CExp
+  | IPrint AExp
+  | ILoad Register Var
+  -- | IStore Var AExp
+  deriving Show
+    
 newtype Block = Block [Stmt]
 
 data Type
@@ -386,8 +415,18 @@ data Array a b
 type M a = State St a
 
 newtype BVar = BVar Integer deriving  (Show, Eq, Generic, Ord)
+instance Hashable BVar
+newtype FVar = FVar String deriving  (Show, Eq, Generic, Ord)
+instance Hashable FVar
 newtype Register = Register Integer deriving  (Show, Eq, Generic, Ord)
 newtype Label = Label Integer deriving (Show, Eq, Generic, Ord)
+instance Hashable Label
+
+data Control
+  = Jump Label
+  | Cond Register Label Label
+  | Exit
+    deriving Show
 
 data St = St
   { nextBVar :: BVar
@@ -400,14 +439,16 @@ data St = St
 initSt :: St
 initSt = St (BVar 0) [[]] [] -- M.empty M.empty
 
--- data BSt = BSt
---   { nextRegister :: Register
---   , nextLabel :: Label
---   , addrMap :: M.HashMap Address AExp
---   , currentLabel :: Label
---   , currentInstrs :: [Instr]
---   , blockMap :: M.HashMap Label ([Instr], Control) -- BAL: add prev labels for llvm comment?
---   }
+type B a = State BSt a
+
+data BSt = BSt
+  { nextRegister :: Register
+  , nextLabel :: Label
+  , currentLabel :: Label
+  , currentInstrs :: [Instr]
+  , blockMap :: M.HashMap Label ([Instr], Control) -- BAL: add prev labels for llvm comment?
+  , varMap :: M.HashMap Var AExp
+  } deriving Show
 
 -- type Key = Word
 
@@ -492,7 +533,7 @@ stmt s = do
 ppE :: E a -> Doc
 ppE (x :: E a) = case x of
   BV a -> text $ "%" ++ show a
-  FV a -> text a
+  FV (FVar a) -> text a
   I a -> text $ show ((fromInteger a) :: a)
   R a -> text $ show ((fromRational a) :: a)
   App a b -> parens $ ppE a <+> ppE b
@@ -546,7 +587,7 @@ instance (Typed a, Count b) => Typed (Array a b) where
 instance Typed Double where typeof _ = TName "double"
 instance Typed Word where typeof _ = TName "uint32_t"
                            
-global = FV
+global = FV . FVar
 
 new :: Typed a => E a -> M (E (Ref a))
 new x = alloc >>= \p -> p .= x >> return p
@@ -555,7 +596,7 @@ ix :: E (Ref (Array a b)) -> E Word -> E (Ref a)
 ix = binop "ix"
 
 load :: E (Ref a) -> E a
-load = unop "load"
+load = Load
 
 pushBlock = modify $ \st -> st{ stmts = [] : stmts st }
 popBlock = do
@@ -563,12 +604,10 @@ popBlock = do
   modify $ \st -> st{ stmts = bs }
   return $ reverse b
 
--- CStat
--- CBlockItem
-
 cfield :: String -> CExpr -> CExpr
 cfield x y = caddrof $ CMember y (cident x) True un
 
+cload :: CExpr -> CExpr
 cload x = CUnary CIndOp x un
 
 caddrof x = CUnary CAdrOp x un
@@ -656,19 +695,19 @@ infixl 9 #
 (#) = flip App
   
 x :: E (Ref Body -> Ref Double)
-x = FV ".x"
+x = global ".x"
 y :: E (Ref Body -> Ref Double)
-y = FV ".y"
+y = global ".y"
 z :: E (Ref Body -> Ref Double)
-z = FV ".z"
+z = global ".z"
 vx :: E (Ref Body -> Ref Double)
-vx = FV ".vx"
+vx = global ".vx"
 vy :: E (Ref Body -> Ref Double)
-vy = FV ".vy"
+vy = global ".vy"
 vz :: E (Ref Body -> Ref Double)
-vz = FV ".vz"
+vz = global ".vz"
 mass :: E (Ref Body -> Ref Double)
-mass = FV ".mass"
+mass = global ".mass"
 
 count :: Count b => E (Ref (Array a b)) -> E Word
 count (_ :: E (Ref (Array a b))) = fromIntegral $ countof (unused :: b)
@@ -735,7 +774,7 @@ advance bodies dt = do
     f z vz
 
 unop :: String -> E a -> E b
-unop v = App (FV v)
+unop v = App (global v)
 
 binop :: String -> E a -> E b -> E c
 binop v a b = App (unop v a) b
@@ -816,7 +855,7 @@ energy bodies = do
       printf $ load e
   return $ load e
 
-t = printf $ 3 + (2 :: E Word)
+-- t = printf $ 3 + (2 :: E Word)
 
 -- void offset_momentum(int nbodies, struct planet * bodies)
 -- {
