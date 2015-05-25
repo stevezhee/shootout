@@ -4,12 +4,12 @@
 {-# OPTIONS -fno-warn-unused-imports #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ExistentialQuantification #-}
 
 module NBody
-  ( main, t, debug_print
-  , (>.), (<.), (>=.), (<=.), (==.), (/=.), (+=)
+  ( -- main, t, debug_print
+  (>.), (<.), (>=.), (<=.), (==.), (/=.), (+=)
   ) where
 
 -- import           Data.IntMap hiding (lookup, map, adjust)
@@ -19,14 +19,14 @@ module NBody
 import           Control.Applicative hiding (Const, empty)
 import           Control.Exception
 import           Control.Monad.State
-import           Data.Generics hiding (Generic, empty)
+import           Data.Generics hiding (Generic, empty, cast)
 import           Data.Hashable
 import           Data.List
 import           Data.Maybe
 import           Data.Word
 import           GHC.Generics (Generic)
-import           Language.C.DSL hiding ((#), (.=), for, while, var)
-import           Text.PrettyPrint
+import           Language.C.DSL hiding ((#), (.=), for, while, var, int)
+import           Text.PrettyPrint hiding (int)
 import qualified Data.HashMap.Strict as M
 import qualified Language.C.DSL as C
 
@@ -123,8 +123,8 @@ instance CNum Word where
 cdouble :: Double -> CExpr
 cdouble x = CConst $ CFloatConst (CFloat $ show x) un
 
-class CNum a where cnum :: a -> Integer -> CExpr
-class CFractional a where cfractional :: a -> Rational -> CExpr
+class Typed a => CNum a where cnum :: a -> Integer -> CExpr
+class Typed a => CFractional a where cfractional :: a -> Rational -> CExpr
 instance CNum Double where cnum _ = cdouble . fromIntegral
 instance CFractional Double where cfractional _ = cdouble . fromRational
 
@@ -137,24 +137,57 @@ cident = internalIdent
 cbvar :: BVar -> String
 cbvar (BVar a) = "v" ++ show a
 
+data U
+  = I Integer Type
+  | R Rational Type
+  | FV FVar
+  | BV BVar Type
+  | Load U
+  | Apps [U]
+  deriving Show
+           
+icase :: (Word -> Integer -> b) -> (Double -> Integer -> b) -> Integer -> Type -> b
+icase f g x t = case () of
+    () | t == tword -> f (fromInteger x) x
+       | t == tdouble -> g (fromInteger x) x
+       | otherwise -> undef "icase"
+
+rcase :: (Double -> Rational -> b) -> Rational -> Type -> b
+rcase g x t = case () of
+    () | t == tdouble -> g (fromRational x) x
+       | otherwise -> undef "rcase"
+                      
+ppE :: E a -> Doc
+ppE x = case unE x of
+  BV (BVar a) _ -> text $ "%" ++ show a
+  FV (FVar a) -> text a
+  I a t -> text $ icase (\_ -> show) (\_ -> show) a t
+  R a t -> text $ rcase (\_ -> show) a t
+  Apps bs -> parens $ hcat $ map (ppE . E) bs
+    
 cexpr :: E a -> CExpr
-cexpr (x :: E a) = case x of
-  I a -> cnum (unused :: a) a
-  R a -> cfractional (unused :: a) a
+cexpr (x :: E a) = case unE x of
+  I a t -> icase cnum cnum a t
+  R a t -> rcase cfractional a t
   FV (FVar a) -> cvar a
-  BV a -> f $ cvar $ cbvar a
+  BV a (TRef t) -> f $ cvar $ cbvar a
     where
-      f = case typeof x of
+      f = case t of
         TName{} -> caddrof
         TArray{} -> id
-  Load a -> cload $ cexpr a
-  App{} -> case (s, lookup s cbuiltins) of
-    ('.':fld, _) -> cunaryf (cfield fld) bs
-    (_, Just f) -> f bs
-    _ -> a C.# bs
+  Load a -> cload $ cexpr $ E a
+  Apps bs -> case (s, lookup s cbuiltins) of
+    ('.':fld, _) -> cunaryf (cfield fld) bs'
+    (_, Just f) -> f bs'
+    _ -> a C.# bs'
     where
-      a@(CVar v _) : bs = cexprs x
+      a@(CVar v _) : bs' = map (cexpr . E) bs
       s = identToString v
+
+-- cexprs :: E a -> [CExpr]
+-- cexprs x = case x of
+--   App a b -> cexprs a ++ [cexpr b]
+--   _ -> [cexpr x]
 
 -- toCExpr :: Exp -> M CExpr
 -- toCExpr x = case x of
@@ -255,25 +288,51 @@ cunaryf f = \[x] -> f x
 
 cbinaryf f = \[x,y] -> f x y
 
-cexprs :: E a -> [CExpr]
-cexprs x = case x of
-  App a b -> cexprs a ++ [cexpr b]
-  _ -> [cexpr x]
-
 type Var = Either BVar FVar
 
-data E a where
-  BV :: Typed a => BVar -> E (Ref a)
-  FV :: FVar -> E a
-  I :: (Num a, Show a, CNum a) => Integer -> E a
-  R :: (Show a, Fractional a, CFractional a) => Rational -> E a
-  App :: E (b -> a) -> E b -> E a
-  Load :: E (Ref a) -> E a
-  
-data Stmt where
-  While :: E Bool -> Block -> Stmt
-  Store :: E (Ref a) -> E a -> Stmt
-  Print :: E a -> Stmt
+data E a = E{ unE :: U }
+
+load :: E (Ref a) -> E a
+load = E . Load . unE
+
+bvar :: Typed a => BVar -> E (Ref a)
+bvar x = let e = E $ BV x $ typeof e in e
+
+fvar :: FVar -> E a
+fvar = E . FV
+
+global :: String -> E a
+global = fvar . FVar
+
+int :: (Num a, Show a, CNum a) => Integer -> E a
+int x = let e = E $ I x $ typeof e in e
+
+rat :: (Show a, Fractional a, CFractional a) => Rational -> E a
+rat x = let e = E $ R x $ typeof e in e
+
+unop :: String -> E a -> E b
+unop v = app (global v)
+
+binop :: String -> E a -> E b -> E c
+binop v a b = app (unop v a) b
+
+app :: E (b -> a) -> E b -> E a
+app x y = case unE x of
+  Apps bs -> E $ Apps $ bs ++ [unE y]
+  a -> app (E $ Apps [a]) y
+
+tdouble = TName "double"
+tword = TName "uint32_t"
+
+class Typed a where typeof :: E a -> Type
+instance Typed Double where typeof _ = tdouble
+instance Typed Word where typeof _ = tword
+instance Typed Body where typeof _ = TName "body_t"
+
+data Stmt
+  = While (E Bool) Block
+  | forall a . Store (E (Ref a)) (E a)
+  | forall a . Print (E a)
 
 data AExp
   = Reg Register
@@ -283,41 +342,42 @@ data AExp
 
 var :: E a -> B Var
 var x = case x of
-  BV a -> return $ Left a
-  FV a -> return $ Right a
+  -- BV a -> return $ Left a
+  -- FV a -> return $ Right a
   _ -> undef $ "var:" ++ show x
 
 aexp :: E a -> B AExp
 aexp x = case x of
-  I a -> return $ Int a
-  R a -> return $ Rat a
-  Load a -> do
-    v <- var a
-    m <- gets varMap
-    case M.lookup v m of
-      Nothing -> do
-        r <- newRegister
-        instr $ ILoad r v
-        let e = Reg r
-        modify $ \st -> st{ varMap = M.insert v e m }
-        return e
-      Just a -> return a
-  App{} -> do
-    (a,bs) <- aexps x
-    r <- newRegister
-    instr $ ILet r $ Call a $ reverse bs
-    return $ Reg r
+  _ -> undefined
+  -- I a -> return $ Int a
+  -- R a -> return $ Rat a
+  -- Load a -> do
+  --   v <- var a
+  --   m <- gets varMap
+  --   case M.lookup v m of
+  --     Nothing -> do
+  --       r <- newRegister
+  --       instr $ ILoad r v
+  --       let e = Reg r
+  --       modify $ \st -> st{ varMap = M.insert v e m }
+  --       return e
+  --     Just a -> return a
+  -- App{} -> do
+  --   (a,bs) <- aexps x
+  --   r <- newRegister
+  --   instr $ ILet r $ Call a $ reverse bs
+  --   return $ Reg r
 
-aexps :: E a -> B (FVar, [AExp])
-aexps x = case x of
-  FV a -> return (a, [])
-  App a b -> do
-    (a', bs) <- aexps a
-    b' <- aexp b
-    return (a', b':bs)
-  BV{} -> undef "aexps:BV"
-  I{} -> undef "aexps:I"
-  R{} -> undef "aexps:R"
+-- aexps :: E a -> B (FVar, [AExp])
+-- aexps x = case x of
+--   FV a -> return (a, [])
+--   App a b -> do
+--     (a', bs) <- aexps a
+--     b' <- aexp b
+--     return (a', b':bs)
+--   BV{} -> undef "aexps:BV"
+--   I{} -> undef "aexps:I"
+--   R{} -> undef "aexps:R"
   
 newRegister :: B Register
 newRegister = do
@@ -379,15 +439,15 @@ toBBlocks x = case x of
     done <- newLabel
     newBlock (Cond r body done) done [cond]
 
-t = execB $ execM $ do
-  let n = global "n"
-  let printw :: E Word -> M () = printf
-  printw 42
-  printw $ load n
-  m <- new 12
-  printw $ load m
-  m .= 13
-  printw $ load m
+-- t = execB $ execM $ do
+--   let n = global "n"
+--   let printw :: E Word -> M () = printf
+--   printw 42
+--   printw $ load n
+--   m <- new 12
+--   printw $ load m
+--   m .= 13
+--   printw $ load m
   
 data CExp
   = Call FVar [AExp]
@@ -406,6 +466,7 @@ newtype Block = Block [Stmt]
 data Type
   = TName String
   | TArray Type Word
+  | TRef Type
   deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
   
@@ -496,7 +557,7 @@ printf x = stmt $ Print x
 alloc :: Typed a => M (E (Ref a))
 alloc = do
   bv@(BVar i) <- gets nextBVar
-  let v = BV bv
+  let v = bvar bv
   modify $ \st -> st{ nextBVar = BVar $ succ i, bvars = (bv, typeof v) : bvars st }
   return v
 
@@ -529,14 +590,6 @@ stmt s = do
 --       modify $ \st -> st{ unique = succ i, expMap = M.insert k i m, keyMap = M.insert i k $ keyMap st }
 --       return i
 --     Just v -> return v
-             
-ppE :: E a -> Doc
-ppE (x :: E a) = case x of
-  BV a -> text $ "%" ++ show a
-  FV (FVar a) -> text a
-  I a -> text $ show ((fromInteger a) :: a)
-  R a -> text $ show ((fromRational a) :: a)
-  App a b -> parens $ ppE a <+> ppE b
     
 instance Show (E a) where show = show . ppE
 
@@ -581,22 +634,17 @@ infixl 8 ##
 (##) :: E (Ref a) -> E (Ref a -> Ref b) -> E b
 (##) x = load . (#) x
 
+instance (Typed a) => Typed (Ref a) where
+  typeof (_ :: E (Ref a)) = TRef $ typeof (unused :: E a)
+
 instance (Typed a, Count b) => Typed (Array a b) where
-  typeof _ = TArray (typeof (unused :: E (Ref a))) (countof (unused :: b))
-
-instance Typed Double where typeof _ = TName "double"
-instance Typed Word where typeof _ = TName "uint32_t"
+  typeof _ = TArray (typeof (unused :: E a)) (countof (unused :: b))
                            
-global = FV . FVar
-
 new :: Typed a => E a -> M (E (Ref a))
 new x = alloc >>= \p -> p .= x >> return p
 
 ix :: E (Ref (Array a b)) -> E Word -> E (Ref a)
 ix = binop "ix"
-
-load :: E (Ref a) -> E a
-load = Load
 
 pushBlock = modify $ \st -> st{ stmts = [] : stmts st }
 popBlock = do
@@ -620,8 +668,6 @@ elimCAdrOp x = case x of
 
 cestmt x = CBlockStmt $ CExpr (Just x) un
 cstring x = CConst $ CStrConst (CString x False) un
-
-class Typed a where typeof :: E (Ref a) -> Type
            
 cstat :: Stmt -> CBlockItem
 cstat x = case x of
@@ -630,7 +676,7 @@ cstat x = case x of
   Print a -> cestmt $ CCall (cvar "printf") [cstring "%.9f\n", cexpr a] un -- BAL: do based on type
 
 bvarcstat :: (BVar, Type) -> CBlockItem
-bvarcstat (b, ty) = case ty of
+bvarcstat (b, TRef ty) = case ty of
   TArray (TName t) n -> cdecl t [CArrDeclr [] (CArrSize False $ cexpr ((fromIntegral n) :: E Word)) un]
   TName t -> cdecl t []
   _ -> undef "cstat:TArray"
@@ -639,27 +685,27 @@ bvarcstat (b, ty) = case ty of
       CBlockDecl $ decl (CTypeSpec $ CTypeDef (cident t) un) (CDeclr (Just $ cident $ cbvar b) cs Nothing [] un) Nothing
 
 infix 4 <.
-(<.) :: Ord a => E a -> E a -> E Bool
+(<.) :: (Ord a, Typed a) => E a -> E a -> E Bool
 (<.) = binop "<"
 
 infix 4 >.
-(>.) :: Ord a => E a -> E a -> E Bool
+(>.) :: (Ord a, Typed a) => E a -> E a -> E Bool
 (>.) = binop ">"
 
 infix 4 <=.
-(<=.) :: Ord a => E a -> E a -> E Bool
+(<=.) :: (Ord a, Typed a) => E a -> E a -> E Bool
 (<=.) = binop "<="
 
 infix 4 >=.
-(>=.) :: Ord a => E a -> E a -> E Bool
+(>=.) :: (Ord a, Typed a) => E a -> E a -> E Bool
 (>=.) = binop ">="
 
 infix 4 ==.
-(==.) :: Ord a => E a -> E a -> E Bool
+(==.) :: (Ord a, Typed a) => E a -> E a -> E Bool
 (==.) = binop "=="
 
 infix 4 /=.
-(/=.) :: Ord a => E a -> E a -> E Bool
+(/=.) :: (Ord a, Typed a) => E a -> E a -> E Bool
 (/=.) = binop "/="
 
 loop :: E Word -> (E Word -> M ()) -> M ()
@@ -691,8 +737,8 @@ infix 4 -=
 adjust f x y = x .= f (load x) y
 
 infixl 9 #
-(#) :: E (Ref a) -> E (Ref a -> Ref b) -> E (Ref b)
-(#) = flip App
+(#) :: E b -> E (b -> a) -> E a
+(#) = flip app
   
 x :: E (Ref Body -> Ref Double)
 x = global ".x"
@@ -773,16 +819,10 @@ advance bodies dt = do
     f y vy
     f z vz
 
-unop :: String -> E a -> E b
-unop v = App (global v)
-
-binop :: String -> E a -> E b -> E c
-binop v a b = App (unop v a) b
-
 -- ternop :: String -> E a -> E b -> E c -> E d
--- ternop v a b c = App (binop v a b) c
+-- ternop v a b c = app (binop v a b) c
 
-binopE :: String -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> E a -> E a -> E a
+binopE :: Typed a => String -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> E a -> E a -> E a
 binopE v _f _g x y = case (x,y) of
   -- (R a, R b) -> R $ f a b
   -- (I a, I b) -> I $ g a b
@@ -795,11 +835,11 @@ instance (Show a, Num a, CNum a) => Num (E a) where
   (*) = binopE "*" (*) (*)
   abs = unop "abs"
   signum = unop "signum"
-  fromInteger = I
+  fromInteger = int
   (-) = binopE "-" (-) (-)
   
 instance (Show a, Fractional a, CNum a, CFractional a) => Fractional (E a) where
-  fromRational = R
+  fromRational = rat
   (/) = binopE "/" (/) (undef "/")
   
 instance (Show a, Floating a, CNum a, CFractional a) => Floating (E a) where
@@ -931,8 +971,6 @@ offset_momentum bodies = do
 
 indices :: [E Word]
 indices = map fromIntegral [0 :: Word .. ]
-
-instance Typed Body where typeof _ = TName "body_t"
 
 assertM x = assert x $ return ()
 
