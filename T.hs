@@ -1,3 +1,7 @@
+{-# OPTIONS -fno-warn-missing-signatures #-}
+{-# OPTIONS -fno-warn-name-shadowing #-}
+{-# OPTIONS -fno-warn-type-defaults #-}
+{-# OPTIONS -fno-warn-unused-imports #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -5,7 +9,7 @@
 
 module T where
 
-import Prelude
+import Prelude hiding (div, mod, lookup)
 import Control.Applicative hiding (empty)
 import Control.Monad.State
 import qualified Data.HashMap.Strict as M
@@ -13,28 +17,29 @@ import Data.Hashable
 import GHC.Generics (Generic)
 import Text.PrettyPrint hiding (int, empty)
 import qualified Text.PrettyPrint as PP
-import Data.List hiding (insert)
+import Data.List hiding (insert, lookup)
 
-data Map a b = Map{ hmap :: M.HashMap b a, next :: a }
+data Map a b = Map{ hmap :: M.HashMap a b, hmapR :: M.HashMap b a, next :: a }
   deriving Show
 
 class PP a where pp :: a -> Doc
 
 instance (Hashable b, Eq b, Num a, PP a, PP b, Ord b, Ord a) => PP (Map a b) where
-  pp = vcat . map (\(a,b) -> hcat [ pp a, text ": ", pp b]) . sort . map swap . M.toList . hmap
-
-swap (a,b) = (b,a)
+  pp = vcat . map (\(a,b) -> hcat [ pp a, text ": ", pp b]) . sort . M.toList . hmap
 
 empty :: (Hashable b, Eq b, Num a) => Map a b
-empty = Map M.empty 0
+empty = Map M.empty M.empty 0
 
 lookupR :: (Hashable b, Eq b) => b -> Map a b -> Maybe a
-lookupR b = M.lookup b . hmap
+lookupR b = M.lookup b . hmapR
 
-instruction :: Op -> [AExp] -> M AExp
-instruction x ys = do
+lookup :: (Hashable a, Eq a) => a -> Map a b -> Maybe b
+lookup a = M.lookup a . hmap
+
+instruction :: Insn -> M AExp
+instruction x = do
   m <- gets insns
-  let (a, m') = insert (Insn x ys) m
+  let (a, m') = insert x m
   modify $ \st -> st{ insns = m' }
   return $ AReg a
 
@@ -47,14 +52,18 @@ terminator b = do
   
 insert x m = case lookupR x m of
   Just a -> (a, m)
-  Nothing -> let a = next m in (a, m{ hmap = M.insert x a $ hmap m, next = succ a })
+  Nothing -> let a = next m in (a, m{ hmap = M.insert a x $ hmap m, hmapR = M.insert x a $ hmapR m, next = succ a })
 
-compile :: Exp -> (Label, St)
-compile e = runState (exit e) $ St empty empty
+data Program = Program Label St
+
+prog (a,b) = Program a b
+
+compile :: Exp -> Program
+compile e = prog $ runState (exit e) $ St empty empty M.empty
 
 exit e = case e of
   AExp a -> terminator $ Exit a
-  Call f -> f (terminator . Exit)
+  Call f -> f (terminator . Exit . \[a] -> a)
 
 data AExp = AInt Integer | AReg Register deriving (Show, Eq, Ord, Generic)
 instance Hashable AExp
@@ -72,39 +81,69 @@ newtype Label = Label Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
 instance Hashable Label
 instance PP Label where
   pp (Label a) = text "L" <> integer a
-  
-data Insn = Insn Op [AExp] deriving (Show, Eq, Ord, Generic)
 
-data Op = Add | Sub | Mul | Div | Mod | Eq | Neq | Gt | Lt | Gte | Lte
+instance PP Program where pp (Program x y) = vcat [ text "main:", pp x, pp y ]
+  
+data Insn
+  = Op Op [AExp]
+  | Phi [(AExp, Label)]
+  deriving (Show, Eq, Ord, Generic)
+          
+data Op = Add | Sub | Mul | Div | Mod | Eq | Ne | Gt | Lt | Gte | Lte
   deriving (Show, Eq, Ord, Generic, Enum)
 instance Hashable Op
 
+add = binop Add
+sub = binop Sub
+mul = binop Mul
+div = binop Div
+mod = binop Mod
+eq = binop Eq
+ne = binop Ne
+gt = binop Gt
+lt = binop Lt
+gte = binop Gte
+lte = binop Lte
+
 instance PP Op where pp = text . show
 
+instance PP a => PP [a] where
+  pp = parens . hsep . map pp
+  
+instance (PP a, PP b) => PP (a,b) where
+  pp (a,b) = parens (pp a <+> pp b)
+    
 instance Hashable Insn
 instance PP Insn where
-  pp (Insn a bs) = hsep $ pp a : map pp bs
-  
+  pp x = case x of
+    Op a bs -> hsep $ pp a : map pp bs
+    Phi bs -> text "phi" <+> pp bs
+      
 data Exp
   = AExp AExp
-  | Call ((AExp -> M Label) -> M Label)
+  | Call (Cont -> M Label)
 
 data Terminator
   = Exit AExp
-  | Branch Label [AExp]
+  | Branch Label
   | Switch AExp Label [Label]
+  | Until AExp Label
   deriving (Show, Eq, Ord, Generic)
 
 instance PP Terminator where
   pp x = case x of
     Exit a -> text "exit" <+> pp a
-    Branch a bs -> hsep ([text "branch", pp a] ++ map pp bs)
+    Branch a -> text "branch" <+> pp a
     Switch a b bs -> hsep ([text "switch", pp a, pp b] ++ map pp bs)
     
 instance Hashable Terminator
 
 type M a = State St a
-data St = St{ insns :: Map Register Insn, blocks :: Map Label Terminator }
+data St = St
+  { insns :: Map Register Insn
+  , blocks :: Map Label Terminator -- Can this be a simple HashMap?
+  , phis :: M.HashMap Label [AExp]
+  }
   deriving Show
 
 instance PP St where
@@ -112,30 +151,109 @@ instance PP St where
 
 int = AExp . AInt
 
-add :: Exp -> Exp -> Exp
-add x y = Call $ flip addf [x,y]
-
-expf cont e = case e of
-  AExp a -> cont a
-  Call f -> f $ \a -> expf cont $ AExp a
+op o xs = Call $ flip (opf o) xs
   
-addf :: (AExp -> M Label) -> [Exp] -> M Label
-addf cont xs = case xs of
-  [AExp a, AExp b] -> do
-    r <- instruction Add [a, b]
-    cont r
-  [Call f, b] -> f $ \a -> addf cont [AExp a, b]
-  [a, Call f] -> f $ \b -> addf cont [a, AExp b]
+binop o x y = op o [x,y]
 
+opf :: Op -> Cont -> [Exp] -> M Label
+opf o cont = loop []
+  where
+    loop xs ys = case ys of
+      [] -> do
+        r <- instruction $ Op o $ reverse xs
+        cont [r]
+      y:ys' -> case y of
+        AExp x -> loop (x:xs) ys'
+        Call f -> f $ \[a] -> loop (a : xs) ys'
+
+type Cont = [AExp] -> M Label
+
+insertPhis :: Label -> [AExp] -> M ()
+insertPhis x ys = modify $ \st -> st{ phis = M.insert x ys $ phis st }
+  
 switch x y ys = Call $ flip switchf (x:y:ys)
-
-switchf cont (x:ys) = case x of
-  AExp a -> do
-    lbl:lbls <- mapM (expf cont) ys -- BAL: when to join these?  always?
-    terminator $ Switch a lbl lbls
-
-  Call f -> f $ \a -> switchf cont (AExp a : ys)
   
+loop b e r = ift (e `gt` 0) (loop (b * b) (e `div` 2) (ift ((e `mod` 2) `ne` 0) (r*b) r)) r
+
+expsf :: Cont -> [Exp] -> M Label
+expsf cont = loop []
+  where
+    loop xs [] = cont $ reverse xs
+    loop xs (y:ys) = case y of
+      AExp x -> loop (x:xs) ys
+      Call f -> f $ \[x] -> loop (x:xs) ys
+
+adjust :: (Hashable a, Eq a, Hashable b, Eq b) => (b -> b) -> a -> Map a b -> Map a b
+adjust f a m = case lookup a m of
+  Nothing -> m
+  Just b -> let b' = f b in m{ hmap = M.insert a b' $ hmap m, hmapR = M.insert b' a $ hmapR m }
+
+phiLabel :: M Label
+phiLabel = do
+  m <- gets blocks
+  let lbl = next m
+  modify $ \st -> st{ blocks = m{ next = succ lbl } }
+  return lbl
+
+phi :: Cont -> [[Exp]] -> M Label
+phi cont xs = do
+  lbl0 <- phiLabel
+  lbls <- mapM (expsf (\bs -> terminator (Branch lbl0) >>= \l -> insertPhis lbl0 bs >> return l)) xs
+  m <- gets phis
+  rs <- mapM (instruction . Phi) $ transpose [ let Just es = M.lookup l m in [ (e,l) | e <- es ] | l <- lbls ]
+  lbl <- cont rs
+  modify $ \st ->
+    st{ phis = M.delete lbl0 $ phis st
+      , blocks = foldr (adjust (\(Branch _) -> Branch lbl)) (blocks st) lbls
+      }
+  return lbl
+
+switchf :: Cont -> [Exp] -> M Label
+switchf cont (x:ys) = case x of
+  Call f -> f $ \[a] -> switchf cont (AExp a : ys)
+  AExp a -> do
+    undefined
+    -- lbl:lbls <- mapM (\[a] -> expsf cont a) ys -- BAL: when to join these with a phi node?  always?
+    -- terminator $ Switch a lbl lbls
+
+dbl x = x + x
+
+until :: ([Exp] -> Exp) -> ([Exp] -> [Exp]) -> [Exp] -> [Exp]
+until f g xs = Call $ \cont -> untilf cont undefined undefined
+  
+untilf :: Cont -> [Exp] -> [Exp] -> M Label
+untilf cont xs ys = phi cont' [xs,ys]
+  where
+    cont' = \(e:es) -> do
+      lbl <- cont es
+      terminator $ Until e lbl
+      
+-- untilf :: Cont -> [Exp] -> M Label
+-- untilf cont = loop []
+--   where
+--     loop xs ys = case ys of
+--       [] -> do
+--         let x':xs' = reverse xs
+--         lbl <- cont xs'
+--         terminator $ Until x' lbl
+--       y:ys' -> case y of
+--         AExp x -> loop (x:xs) ys'
+--         Call f -> f $ \[a] -> loop (a : xs) ys'
+
+ift x y z = switch x y [z]
+
+instance Num Exp where
+  fromInteger = AExp . AInt
+  (*) = mul
+  (+) = add
+  (-) = sub
+  abs = undefined
+  signum = undefined
+  
+-- loop :: (Num a) => a -> a -> a -> a
+-- loop :: M Exp -> M Exp -> M Exp -> M Exp
+-- loop b e r = ift (e > 0) (loop (b*b) (e `div` 2) (ift ((e `mod` 2) /= 0) (r*b) r)) r
+
 -- t = and [ fastpow a b == a^b | a <- [0..9], b <- [0..9] ]
 
 -- ifnz x y z = if (x /= 0) then y else z
@@ -210,10 +328,6 @@ switchf cont (x:ys) = case x of
 -- (/=) = undefined
 
 -- data Op = GT | MUL | DIV | MOD | NE deriving (Show, Eq)
-
--- loop :: (Num a) => a -> a -> a -> a
--- loop :: M Exp -> M Exp -> M Exp -> M Exp
--- loop b e r = ift (e > 0) (loop (b*b) (e `div` 2) (ift ((e `mod` 2) /= 0) (r*b) r)) r
 
 -- -- loop' :: M Exp -> M Exp -> M Exp -> M Exp
 -- loop' ret b e r =
