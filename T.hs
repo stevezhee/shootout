@@ -9,29 +9,272 @@
 
 module T where
 
-import Prelude hiding (div, mod, lookup)
-import Control.Applicative hiding (empty)
-import Control.Monad.State
+import           Control.Applicative hiding (empty)
+import           Control.Exception
+import           Control.Monad.State
 import qualified Data.HashMap.Strict as M
-import Data.Hashable
-import GHC.Generics (Generic)
-import Text.PrettyPrint hiding (int, empty)
+import           Data.Hashable
+import           Data.List hiding (insert, lookup)
+import           GHC.Generics (Generic)
+import           Prelude hiding (div, mod, lookup)
 import qualified Text.PrettyPrint as PP
-import Data.List hiding (insert, lookup)
+import           Text.PrettyPrint hiding (int, empty)
+class PP a where pp :: a -> Doc
 
+instance PP a => PP [a] where pp = parens . hsep . map pp
+  
+instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
+
+newtype Free = Free Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
+instance Hashable Free
+instance PP Free where pp (Free a) = text "F" <> integer a
+
+newtype User = User Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
+instance Hashable User
+instance PP User where pp (User a) = text "U" <> integer a
+
+newtype Bound = Bound Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
+instance Hashable Bound
+instance PP Bound where pp (Bound a) = text "B" <> integer a
+  
+newtype Label = Label Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
+instance Hashable Label
+instance PP Label where pp (Label a) = text "L" <> integer a
+
+data Op = Add | Sub | Mul | Div | Mod | Eq | Ne | Gt | Lt | Gte | Lte
+  deriving (Show, Eq, Ord, Generic, Enum)
+instance Hashable Op
+instance PP Op where pp = text . show
+
+instance PP Integer where pp = integer
+
+type NumBV = Integer
+
+data AExp
+  = Int Integer
+  | FVar Free
+  | BVar Bound
+  | UVar User
+  deriving (Show, Eq, Generic, Ord)
+instance Hashable AExp
+
+data Exp
+  = EAExp AExp
+  | EOp NumBV Op [Exp]
+  | EIf NumBV Exp Exp Exp
+  | EWhile NumBV [Phi Exp] Exp Exp
+  deriving (Show)
+
+type Phi a = (Bound, (a, a))
+
+data CExp
+  = CAExp AExp
+  | COp Op [AExp]
+  | CIf AExp AExp AExp
+  | CWhile [Phi AExp] AExp AExp
+  deriving (Show, Eq, Generic, Ord)
+instance Hashable CExp
+
+fromCExp :: CExp -> Exp
+fromCExp x = case x of
+  CAExp a -> EAExp a
+  COp a bs -> EOp 0 a $ map EAExp bs
+  CIf a b c -> EIf 0 (EAExp a) (EAExp b) (EAExp c)
+  CWhile bs c d -> EWhile 0 [ (v, (EAExp p, EAExp q)) | (v, (p, q)) <- bs ] (EAExp c) (EAExp d)
+
+instance PP CExp where pp = pp . fromCExp
+  
+aexp :: Exp -> M AExp
+aexp x = cexp x >>= name
+
+name :: CExp -> M AExp
+name x = case x of
+  CAExp a -> return a
+  _ -> do
+    tbl <- gets cexps
+    let (a, tbl') = insertR x tbl
+    modify $ \st -> st{ cexps = tbl' }
+    return $ FVar a
+
+swap (x,y) = (y,x)
+pair x y = (x,y)
+
+instance (Hashable b, Eq b, Num a, PP a, PP b, Ord b, Ord a) => PP (MapR a b) where
+  pp = vcat . map (\(a,b) -> hcat [ pp a, text ": ", pp b]) . sort . map swap . M.toList . hmapR
+
+lookupR :: (Hashable b, Eq b) => b -> MapR a b -> Maybe a
+lookupR b = M.lookup b . hmapR
+
+insertR :: (Hashable b, Eq b, Enum a) => b -> MapR a b -> (a, MapR a b)
+insertR b tbl = case lookupR b tbl of
+  Just a -> (a, tbl)
+  Nothing -> let a = next tbl in (a, tbl{ next = succ a, hmapR = M.insert b a $ hmapR tbl })
+    
+cexp :: Exp -> M CExp
+cexp x = case x of
+  EAExp a -> return $ CAExp a
+  EOp _ b cs -> COp b <$> mapM aexp cs
+  EIf _ b c d -> CIf <$> aexp b <*> aexp c <*> aexp d
+  EWhile _ bs c d -> CWhile <$> mapM f bs <*> aexp c <*> aexp d
+    where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
+
+instance PP Exp where
+  pp x = case x of
+    EIf _ a b c -> parens $ vcat [text "If", nest 2 $ vcat [pp a, pp b, pp c] ]
+    EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
+    EAExp a -> pp a
+    EWhile _ bs c d -> parens $ vcat [text "While", nest 2 $ vcat [pp bs, pp c, pp d]]
+
+instance PP AExp where
+  pp x = case x of
+    FVar a -> pp a
+    BVar a -> pp a
+    UVar a -> pp a
+    Int a -> pp a
+
+instance (PP a, PP b, PP c, PP d) => PP (a,b,c,d) where pp (a,b,c,d) = parens (vcat [pp a, pp b, pp c, pp d])
+
+maximumBV :: [Exp] -> Integer
+maximumBV = maximum . map maxBV
+
+maxBV :: Exp -> Integer
+maxBV x = case x of
+  EIf i _ _ _ -> i
+  EOp i _ _ -> i
+  EAExp _ -> 0
+  EWhile i _ _ _ -> i
+
+binop :: Op -> Exp -> Exp -> Exp
+binop o x y = EOp (maximumBV [x,y]) o [x,y]
+  
+add = binop Add
+sub = binop Sub
+mul = binop Mul
+div = binop Div
+mod = binop Mod
+eq = binop Eq
+ne = binop Ne
+gt = binop Gt
+lt = binop Lt
+gte = binop Gte
+lte = binop Lte
+
+ife :: Exp -> Exp -> Exp -> Exp
+ife x y z = EIf (maximumBV [x,y,z]) x y z
+
+var = EAExp . UVar . User
+
+instance Num Exp where
+  fromInteger = EAExp . Int
+  (*) = mul
+  (+) = add
+  (-) = sub
+  abs = undefined
+  signum = undefined
+
+while :: [Exp] -> ([Exp] -> (Exp, [Exp], Exp)) -> Exp
+while xs f = assert (length xs == length ys) $ EWhile (n + m) (zip vs $ zip xs ys) e r
+  where
+    m = genericLength xs
+    (e, ys, r) = f $ map (EAExp . BVar) vs
+    vs = map (Bound . (+) n) [0 .. m - 1]
+    n = maximumBV (e : xs ++ ys)
+
+fastpow b e = while [b, e, 1] $ \[b, e, r] -> (e `gt` 0, [ b * b, e `div` 2, ife ((e `mod` 2) `ne` 0) (r * b) r ], r)
+
+dbl x = x + x
+  
+-- proj :: Int -> M [Expr] -> Expr
+-- proj x m = m >>= (((!! x) <$>) . sequence)
+
+-- var :: Integer -> Expr
+-- -- var x = return (0, Reg $ Register $ negate $ succ x)
+-- var x = return $ Reg $ Register $ negate $ succ x
+
+-- instance PP St where
+--   pp x = vcat (pp (nextUnique x) : map pp (whiles x))
+
+-- type While = ([Register], [Exp], Exp, [Exp])
+
+-- data Tree a = Tree a [Tree a] deriving Show
+
+-- instance PP a => PP (Tree a) where
+--   pp (Tree a []) = pp a
+--   pp (Tree a bs) = parens (text "Tree" <+> pp a <+> hsep (map pp bs))
+
+data MapR a b = MapR
+  { hmapR :: M.HashMap b a
+  , next :: a
+  } deriving Show
+  
+data St = St
+  { cexps :: MapR Free CExp
+  } deriving Show
+
+type M a = State St a
+
+emptyR = MapR M.empty 0
+
+run = flip runState $ St emptyR
+
+instance PP St where
+  pp x = pp $ cexps x
+  
+-- unique :: M Integer
+-- unique = do
+--   u <- gets nextUnique
+--   modify $ \st -> st{ nextUnique = succ u }
+--   return u
+
+-- joinExprs :: ([Ex] -> Ex) -> [Expr] -> Expr
+-- joinExprs f xs = f <$> sequence xs
+--   -- (bs, cs) <- unzip <$> sequence xs
+--   -- return (maximum bs, f cs)
+
+-- while :: [Expr] -> ([Expr] -> (Expr, [Expr])) -> M [Expr]
+-- while xs f = do
+--   ws <- gets whiles
+--   modify $ \st -> st{ whiles = [] }
+--   bs <- sequence xs
+--   vs <- mapM (\_ -> Register <$> unique) xs
+--   let es = map (return . Reg) vs
+--   let (m, ns) = f es
+--   c <- m
+--   ds <- sequence ns
+--   ws' <- gets whiles
+--   modify $ \st -> st{ whiles = Tree (vs, bs, c, ds) ws' : ws }
+--   return es
+
+-- fastpow b e =
+--   proj 2 $ while [b, e, 1] $ \[b, e, r] -> (e `gt` 0, [ b * b, e `div` 2, ift ((e `mod` 2) `ne` 0) (r * b) r ])
+
+-- loop :: M Exp -> M Exp -> M Exp -> M Exp
+-- loop b e r = ift (e > 0) (loop (b*b) (e `div` 2) (ift ((e `mod` 2) /= 0) (r*b) r)) r
+    
+-- data AExp
+--   = AInt Integer
+--   | AReg Register
+--   | AIft AExp [AExp] [AExp]
+--   | AWhile [AExp] AExp [AExp]
+--     deriving (Show, Eq, Ord, Generic)
+             
+-- instance Hashable AExp
+-- instance PP AExp where
+--   pp x = case x of
+--     AInt a -> integer a
+--     AReg a -> pp a
+--     AIft a bs cs -> hsep [text "if", pp bs, pp cs]
+--     AWhile bs c ds -> hsep [text "while", pp bs, pp c, pp ds]
+      
+{-
 data Map a b = Map{ hmap :: M.HashMap a b, hmapR :: M.HashMap b a, next :: a }
   deriving Show
 
-class PP a where pp :: a -> Doc
 
-instance (Hashable b, Eq b, Num a, PP a, PP b, Ord b, Ord a) => PP (Map a b) where
-  pp = vcat . map (\(a,b) -> hcat [ pp a, text ": ", pp b]) . sort . M.toList . hmap
 
 empty :: (Hashable b, Eq b, Num a) => Map a b
 empty = Map M.empty M.empty 0
 
-lookupR :: (Hashable b, Eq b) => b -> Map a b -> Maybe a
-lookupR b = M.lookup b . hmapR
 
 lookup :: (Hashable a, Eq a) => a -> Map a b -> Maybe b
 lookup a = M.lookup a . hmap
@@ -65,23 +308,6 @@ exit e = case e of
   AExp a -> terminator $ Exit a
   Call f -> f (terminator . Exit . \[a] -> a)
 
-data AExp = AInt Integer | AReg Register deriving (Show, Eq, Ord, Generic)
-instance Hashable AExp
-instance PP AExp where
-  pp x = case x of
-    AInt a -> integer a
-    AReg a -> pp a
-    
-newtype Register = Register Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
-instance Hashable Register
-instance PP Register where
-  pp (Register a) = text "R" <> integer a
-  
-newtype Label = Label Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
-instance Hashable Label
-instance PP Label where
-  pp (Label a) = text "L" <> integer a
-
 instance PP Program where pp (Program x y) = vcat [ text "main:", pp x, pp y ]
   
 data Insn
@@ -105,14 +331,7 @@ lt = binop Lt
 gte = binop Gte
 lte = binop Lte
 
-instance PP Op where pp = text . show
 
-instance PP a => PP [a] where
-  pp = parens . hsep . map pp
-  
-instance (PP a, PP b) => PP (a,b) where
-  pp (a,b) = parens (pp a <+> pp b)
-    
 instance Hashable Insn
 instance PP Insn where
   pp x = case x of
@@ -249,6 +468,7 @@ instance Num Exp where
   (-) = sub
   abs = undefined
   signum = undefined
+-}
   
 -- loop :: (Num a) => a -> a -> a -> a
 -- loop :: M Exp -> M Exp -> M Exp -> M Exp
