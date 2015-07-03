@@ -80,7 +80,8 @@ fromCExp x = case x of
   CAExp a -> EAExp a
   COp a bs -> EOp 0 a $ map EAExp bs
   CSwitch a bs c -> ESwitch 0 (EAExp a) (map EAExp bs) (EAExp c)
-  CWhile bs c d -> EWhile 0 [ (v, (EAExp p, EAExp q)) | (v, (p, q)) <- bs ] (EAExp c) (EAExp d)
+  CWhile bs c d ->
+    EWhile 0 [ (v, (EAExp p, EAExp q)) | (v, (p, q)) <- bs ] (EAExp c) (EAExp d)
 
 instance PP CExp where pp = pp . fromCExp
   
@@ -100,7 +101,7 @@ swap (x,y) = (y,x)
 pair x y = (x,y)
 
 instance (Hashable b, Eq b, Num a, PP a, PP b, Ord b, Ord a) => PP (MapR a b) where
-  pp = vcat . map (\(a,b) -> hcat [ pp a, text ": ", pp b]) . sort . map swap . M.toList . hmapR
+  pp = vcat . map pp . sort . map swap . M.toList . hmapR
 
 lookupR :: (Hashable b, Eq b) => b -> MapR a b -> Maybe a
 lookupR b = M.lookup b . hmapR
@@ -108,7 +109,8 @@ lookupR b = M.lookup b . hmapR
 insertR :: (Hashable b, Eq b, Enum a) => b -> MapR a b -> (a, MapR a b)
 insertR b tbl = case lookupR b tbl of
   Just a -> (a, tbl)
-  Nothing -> let a = next tbl in (a, tbl{ next = succ a, hmapR = M.insert b a $ hmapR tbl })
+  Nothing -> (a, tbl{ next = succ a, hmapR = M.insert b a $ hmapR tbl })
+    where a = next tbl
     
 cexp :: Exp -> M CExp
 cexp x = case x of
@@ -133,7 +135,8 @@ instance PP AExp where
     UVar a -> pp a
     Int a -> pp a
 
-instance (PP a, PP b, PP c, PP d) => PP (a,b,c,d) where pp (a,b,c,d) = parens (vcat [pp a, pp b, pp c, pp d])
+instance (PP a, PP b, PP c, PP d) => PP (a,b,c,d) where
+  pp (a,b,c,d) = parens (vcat [pp a, pp b, pp c, pp d])
 
 maximumBV :: [Exp] -> Integer
 maximumBV = maximum . map maxBV
@@ -176,14 +179,17 @@ instance Num Exp where
   signum = undefined
 
 while :: [Exp] -> ([Exp] -> (Exp, [Exp], Exp)) -> Exp
-while xs f = assert (length xs == length ys) $ EWhile (n + m) (zip vs $ zip xs ys) e r
+while xs f =
+  assert (length xs == length ys) $ EWhile (n + m) (zip vs $ zip xs ys) e r
   where
     m = genericLength xs
     (e, ys, r) = f $ map (EAExp . BVar) vs
     vs = map (Bound . (+) n) [0 .. m - 1]
     n = maximumBV (e : xs ++ ys)
 
-fastpow b e = while [b, e, 1] $ \[b, e, r] -> (e `gt` 0, [ b * b, e `div` 2, ife ((e `mod` 2) `ne` 0) (r * b) r ], r)
+fastpow b e =
+  while [b, e, 1] $ \[b, e, r] ->
+    (e `gt` 0, [ b * b, e `div` 2, ife ((e `mod` 2) `ne` 0) (r * b) r ], r)
 
 dbl x = x + x
   
