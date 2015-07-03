@@ -61,7 +61,7 @@ instance Hashable AExp
 data Exp
   = EAExp AExp
   | EOp NumBV Op [Exp]
-  | EIf NumBV Exp Exp Exp
+  | ESwitch NumBV Exp [Exp] Exp
   | EWhile NumBV [Phi Exp] Exp Exp
   deriving (Show)
 
@@ -70,7 +70,7 @@ type Phi a = (Bound, (a, a))
 data CExp
   = CAExp AExp
   | COp Op [AExp]
-  | CIf AExp AExp AExp
+  | CSwitch AExp [AExp] AExp
   | CWhile [Phi AExp] AExp AExp
   deriving (Show, Eq, Generic, Ord)
 instance Hashable CExp
@@ -79,7 +79,7 @@ fromCExp :: CExp -> Exp
 fromCExp x = case x of
   CAExp a -> EAExp a
   COp a bs -> EOp 0 a $ map EAExp bs
-  CIf a b c -> EIf 0 (EAExp a) (EAExp b) (EAExp c)
+  CSwitch a bs c -> ESwitch 0 (EAExp a) (map EAExp bs) (EAExp c)
   CWhile bs c d -> EWhile 0 [ (v, (EAExp p, EAExp q)) | (v, (p, q)) <- bs ] (EAExp c) (EAExp d)
 
 instance PP CExp where pp = pp . fromCExp
@@ -114,13 +114,14 @@ cexp :: Exp -> M CExp
 cexp x = case x of
   EAExp a -> return $ CAExp a
   EOp _ b cs -> COp b <$> mapM aexp cs
-  EIf _ b c d -> CIf <$> aexp b <*> aexp c <*> aexp d
+  ESwitch _ b cs d -> CSwitch <$> aexp b <*> mapM aexp cs <*> aexp d
   EWhile _ bs c d -> CWhile <$> mapM f bs <*> aexp c <*> aexp d
     where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
 
 instance PP Exp where
   pp x = case x of
-    EIf _ a b c -> parens $ vcat [text "If", nest 2 $ vcat [pp a, pp b, pp c] ]
+    ESwitch _ a bs c ->
+      parens $ vcat [text "Switch", nest 2 $ vcat $ map pp $ a : bs ++ [c] ]
     EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
     EAExp a -> pp a
     EWhile _ bs c d -> parens $ vcat [text "While", nest 2 $ vcat [pp bs, pp c, pp d]]
@@ -139,7 +140,7 @@ maximumBV = maximum . map maxBV
 
 maxBV :: Exp -> Integer
 maxBV x = case x of
-  EIf i _ _ _ -> i
+  ESwitch i _ _ _ -> i
   EOp i _ _ -> i
   EAExp _ -> 0
   EWhile i _ _ _ -> i
@@ -159,11 +160,13 @@ lt = binop Lt
 gte = binop Gte
 lte = binop Lte
 
-ife :: Exp -> Exp -> Exp -> Exp
-ife x y z = EIf (maximumBV [x,y,z]) x y z
+switch :: Exp -> [Exp] -> Exp -> Exp
+switch x ys z = ESwitch (maximumBV $ x : z : ys) x ys z
 
 var = EAExp . UVar . User
 
+ife x y z = switch x [z] y
+  
 instance Num Exp where
   fromInteger = EAExp . Int
   (*) = mul
