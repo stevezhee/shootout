@@ -12,13 +12,17 @@ module T where
 import           Control.Applicative hiding (empty)
 import           Control.Exception
 import           Control.Monad.State
+-- import           Data.Graph
 import qualified Data.HashMap.Strict as M
 import           Data.Hashable
 import           Data.List hiding (insert, lookup)
+import           Data.Maybe
 import           GHC.Generics (Generic)
-import           Prelude hiding (div, mod, lookup)
+import           Prelude hiding (lookup)
 import qualified Text.PrettyPrint as PP
 import           Text.PrettyPrint hiding (int, empty)
+
+
 class PP a where pp :: a -> Doc
 
 instance PP a => PP [a] where pp = parens . hsep . map pp
@@ -41,17 +45,21 @@ newtype Label = Label Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
 instance Hashable Label
 instance PP Label where pp (Label a) = text "L" <> integer a
 
-data Op = Add | Sub | Mul | Div | Mod | Eq | Ne | Gt | Lt | Gte | Lte
+data Op
+  = Add | Sub | Mul | Quot | Rem | Eq | Ne | Gt | Lt | Gte | Lte | Abs | Signum
+  | Sqrt | Exp | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh | Acosh
   deriving (Show, Eq, Ord, Generic, Enum)
 instance Hashable Op
 instance PP Op where pp = text . show
 
 instance PP Integer where pp = integer
+instance PP Rational where pp = rational
 
 type NumBV = Integer
 
 data AExp
   = Int Integer
+  | Rat Rational
   | FVar Free
   | BVar Bound
   | UVar User
@@ -62,8 +70,8 @@ data Exp
   = EAExp AExp
   | EOp NumBV Op [Exp]
   | ESwitch NumBV Exp [Exp] Exp
-  | EWhile NumBV [Phi Exp] Exp Exp
-  deriving (Show)
+  | EWhile NumBV Exp [Phi Exp] Exp
+  deriving (Show, Eq)
 
 type Phi a = (Bound, (a, a))
 
@@ -71,31 +79,216 @@ data CExp
   = CAExp AExp
   | COp Op [AExp]
   | CSwitch AExp [AExp] AExp
-  | CWhile [Phi AExp] AExp AExp
+  | CWhile AExp [Phi AExp] AExp
   deriving (Show, Eq, Generic, Ord)
 instance Hashable CExp
+
+{-
+-- v = op es
+<prev computing>
+v = op es
+<next computing> with continuation whatever got passed in
+
+
+push (v = op es) onto the stack
+
+-}
+
+{-
+-- v = switch a bs b
+-- if 'a' is a constant then reduce to the appropriate b
+<prev computing>
+<compute a> with continuation (switch a (map lbl bs) (lbl b))
+
+lbl 0:
+<compute b0> with continuation (goto lbl end:)
+
+...
+
+lbl end:
+v = phi $ zip (b:bs) (lbl b : map lbl bs)
+<next computing> with continuation whatever got passed in
+
+-}
+
+lookupCExp :: Free -> M CExp
+lookupCExp = undefined
+
+pushPhi :: (Either Free Bound, [(AExp, Label)]) -> M ()
+pushPhi = undefined
+
+pushInsn :: (Free, (Op, [AExp])) -> M ()
+pushInsn = undefined
+
+pushTerm :: Terminator -> M ()
+pushTerm = undefined
+
+pushLabel :: Label -> M ()
+pushLabel = undefined
+
+freshLabel :: M Label
+freshLabel = undefined
+
+currentLabel :: M Label
+currentLabel = undefined
+
+compute :: AExp -> M AExp
+compute x = case x of
+  FVar n -> do
+    y <- lookupCExp n
+    case y of
+      CAExp a -> return a
+      COp a bs -> do
+        vbs <- mapM compute bs
+        pushInsn (n, (a,vbs))
+        ok x
+      CSwitch a bs c -> do
+        va <- compute a
+        lbl : lbls <- mapM (const freshLabel) $ c : bs
+        let ps = zip (c : bs) (lbl : lbls)
+        end <- freshLabel
+        pushTerm $ Switch va lbls lbl
+        vps <- flip mapM ps $ \(b,l) -> do
+          pushLabel l
+          vb <- compute b -- BAL: need a 'withMap' function
+          pushTerm $ Jump end
+          pushLabel end
+          return (vb, l)
+        pushPhi (Left n, vps)
+        ok x
+      CWhile a bs c -> do
+        vbs0 <- mapM compute $ map (fst . snd) bs
+        pre <- currentLabel
+        [begin, body, end] <- sequence $ replicate 3 freshLabel
+        pushTerm $ Jump begin
+        
+        pushLabel body
+        vbs1 <- mapM compute $ map (snd . snd) bs
+        pushTerm $ Jump begin
+        
+        pushLabel begin
+        sequence_ [ pushPhi (Right r, [(p, pre),(q, body)]) | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1 ]
+        va <- compute a
+        pushTerm $ Switch va [end] body
+
+        pushLabel end
+        compute c
+        ok c
+        
+  _ -> return x
+  where
+    ok vx = {- BAL: modify map of x with vx -} return vx
+  
+{-
+-- v = while a bs c
+-- 'a' and 'c' must both depend on bs o.w. error
+-- 'a' must not be constant
+
+<prev computing>
+goto begin:
+
+begin:
+phi bs
+<compute a> with continuation (switch a [end:, body:])
+
+body:
+<compute each bs> continue from one to the next with the last one having continuation (goto begin:)
+
+end:
+<compute c>
+<next computing where subst c for v> with continuation whatever got passed in
+
+-}
+
+data Terminator
+  = Jump Label
+  | Switch AExp [Label] Label
+    
+data Block = Block
+  { label :: Label
+  , phis :: [(Either Free Bound, [(AExp, Label)])]
+  , insns :: [(Free, (Op, AExp))]
+  , term :: Terminator
+  }
 
 fromCExp :: CExp -> Exp
 fromCExp x = case x of
   CAExp a -> EAExp a
   COp a bs -> EOp 0 a $ map EAExp bs
   CSwitch a bs c -> ESwitch 0 (EAExp a) (map EAExp bs) (EAExp c)
-  CWhile bs c d ->
-    EWhile 0 [ (v, (EAExp p, EAExp q)) | (v, (p, q)) <- bs ] (EAExp c) (EAExp d)
+  CWhile a bs c ->
+    EWhile 0 (EAExp a) [ (v, (EAExp p, EAExp q)) | (v, (p, q)) <- bs ] (EAExp c)
 
 instance PP CExp where pp = pp . fromCExp
   
 aexp :: Exp -> M AExp
 aexp x = cexp x >>= name
 
+isConst :: AExp -> Bool
+isConst x = case x of
+  Int{} -> True
+  Rat{} -> True
+  _ -> False
+
+isRat :: AExp -> Bool
+isRat x = case x of
+  Rat{} -> True
+  _ -> False
+
+evalOpRat :: Op -> [Rational] -> Rational
+evalOpRat x ys = case x of
+  Add -> a + b
+  Sub -> a - b
+  Mul -> a * b
+  Quot -> a / b
+  Sqrt -> toRational (sqrt (fromRational a) :: Double)
+  _ -> error $ "evalOpRat:" ++ show (x,ys)
+  where
+    a = head ys
+    b = head $ tail ys
+
+evalOpInt :: Op -> [Integer] -> Integer
+evalOpInt x ys = case x of
+  Add -> a + b
+  Sub -> a - b
+  Mul -> a * b
+  Quot -> a `div` b
+  _ -> error $ "evalOpInt:" ++ show (x,ys)
+  where
+    [a,b] = ys
+
+optimize = True
+-- optimize = False
+
 name :: CExp -> M AExp
 name x = case x of
   CAExp a -> return a
-  _ -> do
-    tbl <- gets cexps
-    let (a, tbl') = insertR x tbl
-    modify $ \st -> st{ cexps = tbl' }
-    return $ FVar a
+  COp a bs | optimize -> case (a,bs) of
+    _ | all isConst bs -> return $ case any isRat bs of
+                           True -> Rat $ evalOpRat a $ map toRational bs
+                           False -> Int $ evalOpInt a $ map toInteger bs
+    (Mul, [Rat 1, p]) -> return p
+    (Mul, [Int 1, p]) -> return p
+    (Mul, [p, Rat 1]) -> return p
+    (Mul, [p, Int 1]) -> return p
+    (Mul, [Rat 0, _]) -> return $ Rat 0
+    (Mul, [Int 0, _]) -> return $ Int 0
+    (Mul, [_, Rat 0]) -> return $ Rat 0
+    (Mul, [_, Int 0]) -> return $ Int 0
+    (Add, [Rat 0, p]) -> return p
+    (Add, [Int 0, p]) -> return p
+    (Add, [p, Rat 0]) -> return p
+    (Add, [p, Int 0]) -> return p
+    (Sub, [p, Rat 0]) -> return p
+    (Sub, [p, Int 0]) -> return p
+    _ -> ok
+  _ -> ok
+  where
+    ok = do
+      tbl <- gets cexps
+      let (a, tbl') = insertR x tbl
+      modify $ \st -> st{ cexps = tbl' }
+      return $ FVar a
 
 swap (x,y) = (y,x)
 pair x y = (x,y)
@@ -117,7 +310,7 @@ cexp x = case x of
   EAExp a -> return $ CAExp a
   EOp _ b cs -> COp b <$> mapM aexp cs
   ESwitch _ b cs d -> CSwitch <$> aexp b <*> mapM aexp cs <*> aexp d
-  EWhile _ bs c d -> CWhile <$> mapM f bs <*> aexp c <*> aexp d
+  EWhile _ a bs c -> CWhile <$> aexp a <*> mapM f bs <*> aexp c
     where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
 
 instance PP Exp where
@@ -126,7 +319,7 @@ instance PP Exp where
       parens $ vcat [text "Switch", nest 2 $ vcat $ map pp $ a : bs ++ [c] ]
     EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
     EAExp a -> pp a
-    EWhile _ bs c d -> parens $ vcat [text "While", nest 2 $ vcat [pp bs, pp c, pp d]]
+    EWhile _ a bs c -> parens $ vcat [text "While", nest 2 $ vcat [pp a, pp bs, pp c]]
 
 instance PP AExp where
   pp x = case x of
@@ -134,7 +327,8 @@ instance PP AExp where
     BVar a -> pp a
     UVar a -> pp a
     Int a -> pp a
-
+    Rat a -> pp a
+    
 instance (PP a, PP b, PP c, PP d) => PP (a,b,c,d) where
   pp (a,b,c,d) = parens (vcat [pp a, pp b, pp c, pp d])
 
@@ -150,12 +344,46 @@ maxBV x = case x of
 
 binop :: Op -> Exp -> Exp -> Exp
 binop o x y = EOp (maximumBV [x,y]) o [x,y]
+
+unop :: Op -> Exp -> Exp
+unop o x = EOp (maxBV x) o [x]
+
+unused = error "unused"
+
+instance Real Exp where toRational = unused
+instance Num AExp where
+  (+) = unused
+  (*) = unused
+  (-) = unused
+  abs = unused
+  signum = unused
+  fromInteger = unused
   
-add = binop Add
-sub = binop Sub
-mul = binop Mul
-div = binop Div
-mod = binop Mod
+instance Real AExp where
+  toRational x = case x of
+    Rat a -> a
+    Int a -> toRational a
+    _ -> unused
+
+instance Integral AExp where
+  toInteger x = case x of
+    Int a -> a
+    _ -> unused
+  quotRem = unused
+  
+instance Enum AExp where
+  toEnum = unused
+  fromEnum = unused
+  
+instance Ord Exp where compare = unused
+instance Enum Exp where
+  toEnum = fromInteger . fromIntegral
+  fromEnum = unused
+  
+instance Integral Exp where
+  quotRem x y = (binop Quot x y, binop Rem x y)
+  toInteger = unused
+  
 eq = binop Eq
 ne = binop Ne
 gt = binop Gt
@@ -169,30 +397,171 @@ switch x ys z = ESwitch (maximumBV $ x : z : ys) x ys z
 var = EAExp . UVar . User
 
 ife x y z = switch x [z] y
-  
+
+instance Fractional Exp where
+  fromRational = EAExp . Rat
+  (/) = div
+
 instance Num Exp where
   fromInteger = EAExp . Int
-  (*) = mul
-  (+) = add
-  (-) = sub
-  abs = undefined
-  signum = undefined
+  (*) = binop Mul
+  (+) = binop Add
+  (-) = binop Sub
+  abs = unop Abs
+  signum = unop Signum
 
+instance (PP a, PP b) => PP (Either a b) where
+  pp x = case x of
+    Left a -> pp a
+    Right b -> pp b
+    
 while :: [Exp] -> ([Exp] -> (Exp, [Exp], Exp)) -> Exp
 while xs f =
-  assert (length xs == length ys) $ EWhile (n + m) (zip vs $ zip xs ys) e r
+  assert (length xs == length ys) $ EWhile (n + m) e (zip vs $ zip xs ys) r
+  -- ^ BAL: identify unused loop variables (remove(warning?) or error)
   where
     m = genericLength xs
     (e, ys, r) = f $ map (EAExp . BVar) vs
     vs = map (Bound . (+) n) [0 .. m - 1]
     n = maximumBV (e : xs ++ ys)
 
-fastpow b e =
+fastpow b e u =
   while [b, e, 1] $ \[b, e, r] ->
     (e `gt` 0, [ b * b, e `div` 2, ife ((e `mod` 2) `ne` 0) (r * b) r ], r)
 
+days_per_year = 365.24
+
+bodies :: [Body]
+bodies = map (\[a,b,c,d,e,f,g] -> [a,b,c,d*days_per_year,e*days_per_year,f*days_per_year,g*solar_mass])
+  [
+    [                               -- sun */
+      0, 0, 0, 0, 0, 0, 1
+    ],
+    [                               -- jupiter
+      4.84143144246472090e+00,
+      -1.16032004402742839e+00,
+      -1.03622044471123109e-01,
+      1.66007664274403694e-03,
+      7.69901118419740425e-03,
+      -6.90460016972063023e-05,
+      9.54791938424326609e-04
+    ],
+    [                               -- saturn
+      8.34336671824457987e+00,
+      4.12479856412430479e+00,
+      -4.03523417114321381e-01,
+      -2.76742510726862411e-03,
+      4.99852801234917238e-03,
+      2.30417297573763929e-05,
+      2.85885980666130812e-04
+    ],
+    [                               -- uranus
+      1.28943695621391310e+01,
+      -1.51111514016986312e+01,
+      -2.23307578892655734e-01,
+      2.96460137564761618e-03,
+      2.37847173959480950e-03,
+      -2.96589568540237556e-05,
+      4.36624404335156298e-05
+    ],
+    [                               -- neptune
+      1.53796971148509165e+01,
+      -2.59193146099879641e+01,
+      1.79258772950371181e-01,
+      2.68067772490389322e-03,
+      1.62824170038242295e-03,
+      -9.51592254519715870e-05,
+      5.15138902046611451e-05
+    ]
+  ]
+
+type Body = [Exp]
+
+updFld fld f xs = bs ++ f c : cs
+  where (bs, c:cs) = splitAt fld xs
+
+_px = 0
+_py = 1
+_pz = 2
+_vx = 3
+_vy = 4
+_vz = 5
+_mass = 6
+
+vx_ = updFld _vx
+vy_ = updFld _vy
+vz_ = updFld _vz
+
+getFld = flip (!!)
+mass = getFld _mass
+vx = getFld _vx
+vy = getFld _vy
+vz = getFld _vz
+px = getFld _px
+py = getFld _py
+pz = getFld _pz
+
+advance :: Exp -> [Body] -> [Body]
+advance dt = unfoldr (\bs -> if null bs then Nothing else Just $ loop [] (head bs) (tail bs))
+  where
+    loop rs a [] = (a, reverse rs)
+    loop rs a (b:bs) = let (a', r) = adv a b in loop (r:rs) a' bs
+    adv b b2 =
+      ( vx_ (g dx b2 -) $ vy_ (g dy b2 -) $ vz_ (g dz b2 -) b
+      , vx_ (g dx b +) $ vy_ (g dy b +) $ vz_ (g dz b +) b2
+      )
+      where
+        mag = dt / distance^3
+        distance = sqrt (dx^2 + dy^2 + dz^2)
+        dx = f px
+        dy = f py
+        dz = f pz
+        f g = g b - g b2
+        g a b = a * mass b * mag
+        
+instance Floating Exp where
+  pi = 3.141592653589793 -- BAL: use prelude value of pi?
+  sqrt = unop Sqrt
+  exp = unop Exp
+  log = unop Log
+  sin = unop Sin
+  cos = unop Cos
+  asin = unop Asin
+  atan = unop Atan
+  acos = unop Acos
+  sinh = unop Sinh
+  cosh = unop Cosh
+  asinh = unop Asinh
+  atanh = unop Atanh
+  acosh = unop Acosh
+
+energy :: [Body] -> Exp
+energy = sum . map enrgy . init . tails
+  where
+    enrgy (b:bs) = 0.5 * mass b * (vx b)^2 * (vy b)^2 * (vz b)^2 - sum (map f bs)
+      where
+        f b2 = (mass b * mass b2) / (sqrt ((g px)^2 + (g py)^2 + (g pz)^2))
+          where g h = h b - h b2
+
+offset_momentum :: [Body] -> [Body]
+offset_momentum bs@([a,b,c,_,_,_,d]:_) = [a, b, c, f vx, f vy, f vz, d] : tail bs
+  where
+    f g = -((sum $ map (\b -> g b * mass b) bs) / solar_mass)
+    
+unbodies :: [Body] -> [Exp]
+unbodies = concat
+
+mkbodies :: [Exp] -> [Body]
+mkbodies = unfoldr (\bs -> if null bs then Nothing else Just $ splitAt 7 bs)
+
+nbody n = while (0 : unbodies (offset_momentum bodies)) (\(x:xs) -> (x `lt` n, x + 1 : unbodies (advance 0.01 $ mkbodies xs), energy $ mkbodies xs))
+
 dbl x = x + x
-  
+
+solar_mass = 4 * pi^2
+
+-- data Body = Body{ x :: Double, y :: Double, z :: Double, vx :: Double, vy :: Double, vz :: Double, mass :: Double }
+
 -- proj :: Int -> M [Expr] -> Expr
 -- proj x m = m >>= (((!! x) <$>) . sequence)
 
@@ -220,11 +589,31 @@ data St = St
   { cexps :: MapR Free CExp
   } deriving Show
 
+-- -- foo = M.toList . cexps
+-- foo = undefined -- graphFromEdges [] -- . map f . M.toList . hmapR . cexps
+
+-- -- toCFGNodes :: (Free, CExp) -> [(Free, Free)]
+-- toCFGNodes (x,y) = case y of
+--   CAExp{} -> unused
+--   COp _ bs -> ins bs
+--   CSwitch a bs c -> ins [a] ++ outs (c : bs)
+--   CWhile a bs c -> ins (a : map (fst . snd) bs) ++ outs (c : map (snd . snd) bs)
+--   where
+--     ins = map (flip pair x) . catMaybes . map toFree
+--     outs = map (pair x) . catMaybes . map toFree
+
+-- toFree :: AExp -> Maybe Free
+-- toFree x = case x of
+--   FVar a -> Just a
+--   _ -> Nothing
+  
 type M a = State St a
 
 emptyR = MapR M.empty 0
 
 run = flip runState $ St emptyR
+
+compile = print . pp . run . aexp
 
 instance PP St where
   pp x = pp $ cexps x
