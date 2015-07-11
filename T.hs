@@ -21,7 +21,7 @@ import           GHC.Generics (Generic)
 import           Prelude hiding (lookup)
 import qualified Text.PrettyPrint as PP
 import           Text.PrettyPrint hiding (int, empty)
-
+import Data.Array
 
 class PP a where pp :: a -> Doc
 
@@ -29,7 +29,7 @@ instance PP a => PP [a] where pp = parens . hsep . map pp
   
 instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
 
-newtype Free = Free Integer deriving (Show, Eq, Num, Ord, Generic, Enum)
+newtype Free = Free Integer deriving (Show, Eq, Num, Ord, Generic, Enum, Ix)
 instance Hashable Free
 instance PP Free where pp (Free a) = text "F" <> integer a
 
@@ -111,31 +111,35 @@ v = phi $ zip (b:bs) (lbl b : map lbl bs)
 
 -}
 
-lookupCExp :: Free -> M CExp
-lookupCExp = undefined
+lookupFVar :: Free -> N CExp
+lookupFVar x = flip (!) x <$> gets fvars
 
-pushPhi :: (Either Free Bound, [(AExp, Label)]) -> M ()
-pushPhi = undefined
+pushInsn :: (Free, (Op, [AExp])) -> N ()
+pushInsn x =
+  modify $ \st -> st{ blocks = let b:bs = blocks st in b{ insns = x : insns b } : bs }
 
-pushInsn :: (Free, (Op, [AExp])) -> M ()
-pushInsn = undefined
+pushTerm :: Terminator -> N ()
+pushTerm x = modify $ \st -> st{ blocks = let b:bs = blocks st in b{ term = x, insns = reverse $ insns b } : bs }
 
-pushTerm :: Terminator -> M ()
-pushTerm = undefined
+pushLabel :: Label -> [(Either Free Bound, [(AExp, Label)])] -> N ()
+pushLabel lbl ps = modify $ \st -> st{ blocks = Block lbl ps [] Exit : blocks st }
 
-pushLabel :: Label -> M ()
-pushLabel = undefined
+freshLabel :: N Label
+freshLabel = do
+  lbl <- gets nextLabel
+  modify $ \st -> st{ nextLabel = succ lbl }
+  return lbl
 
-freshLabel :: M Label
-freshLabel = undefined
+currentLabel :: N Label
+currentLabel = label . head <$> gets blocks
 
-currentLabel :: M Label
-currentLabel = undefined
-
-compute :: AExp -> M AExp
+compute :: AExp -> N AExp
 compute x = case x of
   FVar n -> do
-    y <- lookupCExp n
+    let ok vx = do
+          modify $ \st -> st{ fvars = fvars st // [(n, CAExp vx)] }
+          return vx
+    y <- lookupFVar n
     case y of
       CAExp a -> return a
       COp a bs -> do
@@ -149,12 +153,11 @@ compute x = case x of
         end <- freshLabel
         pushTerm $ Switch va lbls lbl
         vps <- flip mapM ps $ \(b,l) -> do
-          pushLabel l
+          pushLabel l []
           vb <- compute b -- BAL: need a 'withMap' function
           pushTerm $ Jump end
-          pushLabel end
           return (vb, l)
-        pushPhi (Left n, vps)
+        pushLabel end [(Left n, vps)]
         ok x
       CWhile a bs c -> do
         vbs0 <- mapM compute $ map (fst . snd) bs
@@ -162,22 +165,20 @@ compute x = case x of
         [begin, body, end] <- sequence $ replicate 3 freshLabel
         pushTerm $ Jump begin
         
-        pushLabel body
+        pushLabel body []
         vbs1 <- mapM compute $ map (snd . snd) bs
         pushTerm $ Jump begin
         
-        pushLabel begin
-        sequence_ [ pushPhi (Right r, [(p, pre),(q, body)]) | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1 ]
+        pushLabel begin [ (Right r, [(p, pre),(q, body)])
+                        | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1 ]
         va <- compute a
         pushTerm $ Switch va [end] body
 
-        pushLabel end
+        pushLabel end []
         compute c
         ok c
         
   _ -> return x
-  where
-    ok vx = {- BAL: modify map of x with vx -} return vx
   
 {-
 -- v = while a bs c
@@ -199,17 +200,6 @@ end:
 <next computing where subst c for v> with continuation whatever got passed in
 
 -}
-
-data Terminator
-  = Jump Label
-  | Switch AExp [Label] Label
-    
-data Block = Block
-  { label :: Label
-  , phis :: [(Either Free Bound, [(AExp, Label)])]
-  , insns :: [(Free, (Op, AExp))]
-  , term :: Terminator
-  }
 
 fromCExp :: CExp -> Exp
 fromCExp x = case x of
@@ -313,13 +303,20 @@ cexp x = case x of
   EWhile _ a bs c -> CWhile <$> aexp a <*> mapM f bs <*> aexp c
     where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
 
+instance PP Block where
+  pp (Block a b c d) = vcat [pp a, nest 2 $ vcat $ map pp b ++ map pp c ++ [pp d]]
+
+instance PP St2 where
+  pp st = vcat $ map pp $ blocks st
+  
+ppSwitch a bs c = parens $ hsep $ text "switch" : pp a : map pp bs ++ [pp c]
+  
 instance PP Exp where
   pp x = case x of
-    ESwitch _ a bs c ->
-      parens $ vcat [text "Switch", nest 2 $ vcat $ map pp $ a : bs ++ [c] ]
+    ESwitch _ a bs c -> ppSwitch a bs c
     EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
     EAExp a -> pp a
-    EWhile _ a bs c -> parens $ vcat [text "While", nest 2 $ vcat [pp a, pp bs, pp c]]
+    EWhile _ a bs c -> parens $ vcat [text "while", nest 2 $ vcat [pp a, pp bs, pp c]]
 
 instance PP AExp where
   pp x = case x of
@@ -425,7 +422,7 @@ while xs f =
     vs = map (Bound . (+) n) [0 .. m - 1]
     n = maximumBV (e : xs ++ ys)
 
-fastpow b e u =
+fastpow b e =
   while [b, e, 1] $ \[b, e, r] ->
     (e `gt` 0, [ b * b, e `div` 2, ife ((e `mod` 2) `ne` 0) (r * b) r ], r)
 
@@ -589,6 +586,33 @@ data St = St
   { cexps :: MapR Free CExp
   } deriving Show
 
+data St2 = St2
+  { blocks :: [Block]
+  , nextLabel :: Label
+  , fvars :: Array Free CExp
+  } deriving Show
+
+data Terminator
+  = Jump Label
+  | Switch AExp [Label] Label
+  | Exit
+  deriving Show
+
+instance PP Terminator where
+  pp x = case x of
+    Jump a -> text "jump" <+> pp a
+    Switch a bs c -> ppSwitch a bs c
+    Exit -> text "exit"
+
+data Block = Block
+  { label :: Label
+  , phis :: [(Either Free Bound, [(AExp, Label)])]
+  , insns :: [(Free, (Op, [AExp]))]
+  , term :: Terminator
+  } deriving Show
+
+type N a = State St2 a
+
 -- -- foo = M.toList . cexps
 -- foo = undefined -- graphFromEdges [] -- . map f . M.toList . hmapR . cexps
 
@@ -611,12 +635,24 @@ type M a = State St a
 
 emptyR = MapR M.empty 0
 
-run = flip runState $ St emptyR
+runSt x = runState (aexp x) $ St emptyR
 
-compile = print . pp . run . aexp
+compile x = do
+  let (a, st) = runSt x
+  print $ pp (a, st)
+  let (b, st2) = runSt2 $ cexps st
+  print $ pp st2
 
-instance PP St where
-  pp x = pp $ cexps x
+runSt2 x = (a, st{ blocks = sortBy (\a b -> compare (label a) (label b)) $ blocks st })
+  where
+    (a, st) = runState m $ St2 [Block 0 [] [] Exit] 1 arr
+    arr = array (0, n) $ map swap $ M.toList $ hmapR x
+    m = do
+      compute $ FVar n
+      pushTerm Exit
+    n = pred $ next x
+    
+instance PP St where pp x = pp $ cexps x
   
 -- unique :: M Integer
 -- unique = do
