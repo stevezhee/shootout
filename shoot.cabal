@@ -6,7 +6,7 @@ version:             0.1.0.0
 -- synopsis:            
 -- description:         
 -- license:             
-license-file:        LICENSE
+license-file:        LICENSE.md
 -- author:              
 -- maintainer:          
 -- copyright:           
@@ -16,9 +16,9 @@ cabal-version:       >=1.8
 
 executable shoot
   main-is: Main.hs
-  build-depends: shoot, base, pretty, array, llvm-general-pure, llvm-general, hashable, mtl, unordered-containers, transformers-compat, containers
+  build-depends: shoot, base, pretty, array, hashable, mtl, unordered-containers, transformers-compat, containers, llvm-general-pure, llvm-general
 
 library
   exposed-modules:     Shoot, Untyped
   -- other-modules:       
-  build-depends:       base, pretty, array, llvm-general-pure, llvm-general, hashable, mtl, unordered-containers, transformers-compat, containers
+  build-depends:       base, pretty, array, hashable, mtl, unordered-containers, transformers-compat, containers, llvm-general-pure, llvm-general

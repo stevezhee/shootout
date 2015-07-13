@@ -1,5 +1,5 @@
 all :
-	stack install
+	stack.exe install
 	shoot
 	llvm-as t.llvm
 
@@ -23,3 +23,5 @@ all :
 
 # clean :
 # 	rm -f *.out *.exe *.stackdump *.o *.hi gen.c
+
+# C:\Users\letner\AppData\Local\Programs\stack\i386-windows\ghc-7.8.4\bin:C:\Users\letner\AppData\Local\Programs\stack\i386-windows\ghc-7.8.4\mingw\bin:C:\Users\letner\AppData\Local\Programs\stack\i386-windows\git-2.4.5.1\cmd:C:\Users\letner\AppData\Local\Programs\stack\i386-windows\git-2.4.5.1\usr\bin:
