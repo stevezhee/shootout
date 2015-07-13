@@ -1,7 +1,14 @@
-all :
+all : a.exe
+
+t.ll : Main.hs Shoot.hs Untyped.hs
 	stack install
 	shoot
-	llvm-as t.llvm
+
+%.s : %.ll
+	llc $^
+
+a.exe : t.s main.c
+	clang main.c t.s
 
 # GCC = gcc -O2 -o $@ $< -lm
 

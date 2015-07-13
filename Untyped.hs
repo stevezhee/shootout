@@ -44,7 +44,7 @@ llvmFunction (t, n, us, bs) = GlobalDefinition functionDefaults
   , basicBlocks = bs
   }
 
-llvmFilename = "t.llvm"
+llvmFilename = "t.ll"
 llvmModule xs = A.defaultModule
   { moduleName = llvmFilename
   , moduleDefinitions = map llvmFunction xs

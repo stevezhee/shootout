@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 module Shoot where
 
 import qualified Untyped as U
@@ -5,9 +6,7 @@ import Untyped (unused, Op(..), Type(..), Typed(..))
 import Prelude
 import Data.Word
 
-data E a = E{ unE :: [U.Exp] }
-
-unE_ (E [x]) = x
+data E a = E{ unE :: U.Exp }
 
 instance EType Word where etypeof _ = TUInt 32
 instance EType Int where etypeof _ = TSInt 32
@@ -19,9 +18,9 @@ class EType a where  etypeof :: E a -> Type
 instance EType a => Typed (E a) where typeof = etypeof
 
 var :: EType a => Integer -> E a
-var x = let v = E [U.var (typeof v) x] in v
+var x = let v = E $ U.var (typeof v) x in v
 
-compile (E [x]) = U.compile x
+compile (E x) = U.compile x
 
 eq :: (EType a, Ord a) => E a -> E a -> E Bool
 eq = binop Eq
@@ -37,17 +36,37 @@ lte :: (EType a, Ord a) => E a -> E a -> E Bool
 lte = binop Lte
 
 switch :: (EType a, EType b) => E a -> [E b] -> E b -> E b
-switch a bs c = E [U.switch (unE_ a) (map unE_ bs) (unE_ c)]
+switch a bs c = E $ U.switch (unE a) (map unE bs) (unE c)
 
-while :: (EType a, EType b) => E a -> (E a -> (E Bool, E a, E b)) -> E b
-while x f = E [U.while (unE x) g]
-  where g = \bs -> let (a, b, c) = f (E bs) in (unE_ a, unE b, unE_ c)
+class Aggregate a where
+  agg :: [U.Exp] -> a
+  unAgg :: a -> [U.Exp]
+
+instance Aggregate (E a) where
+  agg [x] = E x
+  unAgg (E x) = [x]
+
+instance Aggregate (E a, E b) where
+  agg (a:bs) = (agg [a], agg bs)
+  unAgg (a,b) = unAgg a ++ unAgg b
+
+instance Aggregate (E a, E b, E c) where
+  agg (a:b:cs) = (agg [a], agg [b], agg cs)
+  unAgg (a,b,c) = unAgg a ++ unAgg (b,c)
+
+instance Aggregate [E a] where
+  agg xs = map agg [[x] | x <- xs]
+  unAgg = concatMap unAgg
+
+while :: (Aggregate a, EType b) => a -> (a -> (E Bool, a, E b)) -> E b
+while x f = E $ U.while (unAgg x) g
+  where g = \bs -> let (a, b, c) = f (agg bs) in (unE a, unAgg b, unE c)
 
 ife :: (EType a) => E Bool -> E a -> E a -> E a
 ife x y z = switch x [z] y
 
 instance (EType a, Num a) => Num (E a) where
-  fromInteger x = let v = E [U.EAExp $ U.Int (typeof v) x] in v
+  fromInteger x = let v = E $ U.EAExp $ U.Int (typeof v) x in v
   (*) = binop Mul
   (+) = binop Add
   (-) = binop Sub
@@ -65,23 +84,6 @@ instance (EType a, Enum a, Num a) => Enum (E a) where
   toEnum = fromInteger . fromIntegral
   fromEnum = error "fromEnum"
 
-instance (EType a, EType b) => EType (a,b) where etypeof = error "etypeof"
-
-pair :: (EType a, EType b) => E a -> E b -> E (a,b)
-pair x y = E $ unE x ++ unE y
-
-unpair :: (EType a, EType b) => E (a,b) -> (E a, E b)
-unpair (E (x:xs)) = (E [x], E xs)
-
-tuple3 :: (EType a, EType b, EType c) => E a -> E b -> E c -> E (a,(b,c))
-tuple3 a b c = pair a $ pair b c
-
-untuple3 :: (EType a, EType b, EType c) => E (a,(b,c)) -> (E a, E b, E c)
-untuple3 x = (a, b, c)
-  where
-    (a, r) = unpair x
-    (b, c) = unpair r
-
 div' :: Integral a => E a -> E a -> E a
 div' = binop Quot
 mod' :: Integral a => E a -> E a -> E a
@@ -89,19 +91,19 @@ mod' = binop Rem
 
 fastpow :: (EType a, EType b, Num a, Integral b, Ord b, Real b) => E a -> E b -> E a
 fastpow b e =
-  while (tuple3 b e 1) $ \x -> let (b, e, r) = untuple3 x in
-    (e `gt` 0, tuple3 (b * b) (e `div'` 2) (ife ((e `mod'` 2) `ne` 0) (r * b) r), r)
+  while (b, e, 1) $ \(b, e, r) ->
+    (e `gt` 0, (b * b, e `div'` 2, ife ((e `mod'` 2) `ne` 0) (r * b) r), r)
 
 dbl x = x + x
 
 binop :: Op -> E a -> E b -> E c
-binop o (E [x]) (E [y]) = E [U.binop o x y]
+binop o (E x) (E y) = E $ U.binop o x y
   
 unop :: Op -> E a -> E b
-unop o (E [x]) = E [U.unop o x]
+unop o (E x) = E $ U.unop o x
 
 instance (EType a, Fractional a) => Fractional (E a) where
-  fromRational x = let v = E [U.EAExp $ U.Rat (typeof v) x] in v
+  fromRational x = let v = E $ U.EAExp $ U.Rat (typeof v) x in v
   (/) = binop Quot
 
 instance (EType a, Floating a) => Floating (E a) where
@@ -236,4 +238,4 @@ instance (EType a, Floating a) => Floating (E a) where
 --     , energy $ mkbodies xs
 --     )
 
--- solar_mass = 4 * pi^2
+solar_mass = 4 * pi^2

@@ -10,5 +10,5 @@ dist/
 *.hi
 TAGS
 .stack-work/
-*.llvm
+*.ll
 *.bc
