@@ -1,5 +1,5 @@
 all :
-	stack.exe install
+	stack install
 	shoot
 	llvm-as t.llvm
 
