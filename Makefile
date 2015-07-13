@@ -1,20 +1,25 @@
-GCC = gcc -O2 -o $@ $< -lm
+all :
+	stack install
+	shoot
+	llvm-as t.llvm
 
-all : nbody.out main.out
-	diff $^
-	ls -al *.exe
+# GCC = gcc -O2 -o $@ $< -lm
 
-%.out : %.exe
-	./$< 100 > $@
+# all : nbody.out main.out
+# 	diff $^
+# 	ls -al *.exe
 
-nbody.exe : nbody.c
-	${GCC}
+# %.out : %.exe
+# 	./$< 100 > $@
 
-gen.c : NBody.hs
-	runghc -Wall $< > $@
+# nbody.exe : nbody.c
+# 	${GCC}
 
-main.exe : main.c gen.c
-	${GCC}
+# gen.c : NBody.hs
+# 	runghc -Wall $< > $@
 
-clean :
-	rm -f *.out *.exe *.stackdump *.o *.hi gen.c
+# main.exe : main.c gen.c
+# 	${GCC}
+
+# clean :
+# 	rm -f *.out *.exe *.stackdump *.o *.hi gen.c
