@@ -2,7 +2,7 @@
 module Shoot where
 
 import qualified Untyped as U
-import Untyped (unused, Op(..), Type(..), Typed(..))
+import Untyped (unused, Op(..), Type(..), Typed(..), Tree(..), Exp(..))
 import Prelude
 import Data.Word
 
@@ -39,24 +39,24 @@ switch :: (EType a, EType b) => E a -> [E b] -> E b -> E b
 switch a bs c = E $ U.switch (unE a) (map unE bs) (unE c)
 
 class Aggregate a where
-  agg :: [U.Exp] -> a
-  unAgg :: a -> [U.Exp]
+  agg :: Tree U.Exp -> a
+  unAgg :: a -> Tree U.Exp
 
 instance Aggregate (E a) where
-  agg [x] = E x
-  unAgg (E x) = [x]
+  agg (Leaf x) = E x
+  unAgg (E x) = Leaf x
 
-instance Aggregate (E a, E b) where
-  agg (a:bs) = (agg [a], agg bs)
-  unAgg (a,b) = unAgg a ++ unAgg b
+instance (Aggregate a, Aggregate b) => Aggregate (a, b) where
+  agg (Node [a,b]) = (agg a, agg b)
+  unAgg (a,b) = Node [unAgg a, unAgg b]
 
-instance Aggregate (E a, E b, E c) where
-  agg (a:b:cs) = (agg [a], agg [b], agg cs)
-  unAgg (a,b,c) = unAgg a ++ unAgg (b,c)
+instance (Aggregate a, Aggregate b, Aggregate c) => Aggregate (a, b, c) where
+  agg (Node [a,b,c]) = (agg a, agg b, agg c)
+  unAgg (a,b,c) = Node [unAgg a, unAgg b, unAgg c]
 
-instance Aggregate [E a] where
-  agg xs = map agg [[x] | x <- xs]
-  unAgg = concatMap unAgg
+instance (Aggregate a) => Aggregate [a] where
+  agg (Node xs) = map agg xs
+  unAgg xs = Node $ map unAgg xs
 
 while :: (Aggregate a, EType b) => a -> (a -> (E Bool, a, E b)) -> E b
 while x f = E $ U.while (unAgg x) g

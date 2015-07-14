@@ -13,13 +13,13 @@ module Untyped where
 
 import           Control.Applicative hiding (empty)
 import           Control.Exception
-import           Control.Monad.State
+import           Control.Monad.State hiding (mapM, sequence)
 import qualified Data.HashMap.Strict as M
 import           Data.Hashable
-import           Data.List hiding (insert, lookup)
+import           Data.List hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr)
 import           Data.Maybe
 import           GHC.Generics (Generic)
-import           Prelude hiding (lookup)
+import           Prelude hiding (lookup, elem, maximum, concatMap, mapM, sequence, foldr)
 import qualified Text.PrettyPrint as PP
 import           Text.PrettyPrint hiding (int, empty)
 import Data.Array
@@ -36,6 +36,25 @@ import qualified LLVM.General.AST.FloatingPointPredicate as FP
 import qualified LLVM.General.AST.Float as F
 import Data.Set (Set)
 import qualified Data.Set as S
+import Data.Foldable
+import Data.Traversable
+
+data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
+
+instance Foldable Tree where
+  foldr f b x = case x of
+    Leaf a -> f a b
+    Node ns -> foldr (flip (foldr f)) b ns
+
+instance Traversable Tree where
+  traverse f x = case x of
+    Leaf a -> Leaf <$> f a
+    Node ns -> Node <$> traverse (traverse f) ns
+
+instance Functor Tree where
+  fmap f x = case x of
+    Leaf a -> Leaf $ f a
+    Node ns -> Node $ fmap (fmap f) ns
 
 llvmFunction (t, n, us, bs) = GlobalDefinition functionDefaults
   { returnType = t
@@ -220,7 +239,7 @@ data Exp
   = EAExp AExp
   | EOp NumBV Op [Exp]
   | ESwitch NumBV Exp [Exp] Exp
-  | EWhile NumBV Exp [Phi Exp] Exp
+  | EWhile NumBV Exp (Tree (Phi Exp)) Exp
   deriving (Show, Eq)
 
 instance Typed CExp where typeof = typeof . fromCExp
@@ -364,7 +383,7 @@ fromCExp x = case x of
   COp a bs -> EOp 0 a $ map EAExp bs
   CSwitch a bs c -> ESwitch 0 (EAExp a) (map EAExp bs) (EAExp c)
   CWhile a bs c ->
-    EWhile 0 (EAExp a) [ (v, (EAExp p, EAExp q)) | (v, (p, q)) <- bs ] (EAExp c)
+    EWhile 0 (EAExp a) (Node $ flip fmap bs $ \(v, (p, q)) -> Leaf (v, (EAExp p, EAExp q))) (EAExp c)
 
 instance PP CExp where pp = pp . fromCExp
   
@@ -457,7 +476,7 @@ cexp x = case x of
   EAExp a -> return $ CAExp a
   EOp _ b cs -> COp b <$> mapM aexp cs
   ESwitch _ b cs d -> CSwitch <$> aexp b <*> mapM aexp cs <*> aexp d
-  EWhile _ a bs c -> CWhile <$> aexp a <*> mapM f bs <*> aexp c
+  EWhile _ a bs c -> CWhile <$> aexp a <*> mapM f (toList bs) <*> aexp c
     where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
 
 instance PP Block where
@@ -473,6 +492,8 @@ instance PP Exp where
     EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
     EAExp a -> pp a
     EWhile _ a bs c -> parens $ vcat [text "while", nest 2 $ vcat [pp a, pp bs, pp c]]
+
+instance (Foldable t, PP a) => PP (t a) where pp = pp . toList
 
 instance PP AExp where
   pp x = case x of
@@ -524,15 +545,20 @@ switch x ys z = ESwitch (maximumBV $ x : z : ys) x ys z
 
 var t = EAExp . UVar . User t
     
-while :: [Exp] -> ([Exp] -> (Exp, [Exp], Exp)) -> Exp
-while xs f =
-  assert (length xs == length ys) $ EWhile (n + m) e (zip vs $ zip xs ys) r
+while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp, Exp)) -> Exp
+while xs f = EWhile (n + m) e (zipTree vs $ zipTree xs ys) r
   -- ^ BAL: identify unused loop variables (remove(warning?) or error)
   where
-    m = genericLength xs
-    (e, ys, r) = f $ map (EAExp . BVar) vs
-    vs = map (\(i,x) -> Bound (typeof x) $ n + i) $ zip [0 .. ] xs
-    n = maximumBV (e : xs ++ ys)
+    m = genericLength $ toList xs
+    (e, ys, r) = f $ fmap (EAExp . BVar) vs
+    vs :: Tree Bound
+    vs = snd $ mapAccumR (\(w:ws) x -> (ws, Bound (typeof x) $ n + w)) [0..] xs
+    n = maximumBV (e : toList xs ++ toList ys)
+
+zipTree :: Tree a -> Tree b -> Tree (a,b)
+zipTree (Node xs) (Node ys) = Node $ map (uncurry zipTree) $ zip xs ys
+zipTree (Leaf a) (Leaf b) = Leaf (a,b)
+zipTree _ _ = Node []
 
 instance (PP a, PP b) => PP (Either a b) where
   pp x = case x of
