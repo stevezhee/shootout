@@ -62,6 +62,10 @@ while :: (Aggregate a, EType b) => a -> (a -> (E Bool, a, E b)) -> E b
 while x f = E $ U.while (unAgg x) g
   where g = \bs -> let (a, b, c) = f (agg bs) in (unE a, unAgg b, unE c)
 
+while' :: (Aggregate a) => a -> (a -> (E Bool, a)) -> a
+while' x f = agg $ U.while' (unAgg x) g
+  where g = \bs -> let (a, b) = f (agg bs) in (unE a, unAgg b)
+
 ife :: (EType a) => E Bool -> E a -> E a -> E a
 ife x y z = switch x [z] y
 
@@ -93,6 +97,11 @@ fastpow :: (EType a, EType b, Num a, Integral b, Ord b, Real b) => E a -> E b ->
 fastpow b e =
   while (b, e, 1) $ \(b, e, r) ->
     (e `gt` 0, (b * b, e `div'` 2, ife ((e `mod'` 2) `ne` 0) (r * b) r), r)
+
+fastpow' :: (EType a, EType b, Num a, Integral b, Ord b, Real b) => E a -> E b -> E a
+fastpow' b e =
+  snd $ while' ((b, e), 1) $ \((b, e), r) ->
+    (e `gt` 0, ((b * b, e `div'` 2), ife ((e `mod'` 2) `ne` 0) (r * b) r))
 
 dbl x = x + x
 

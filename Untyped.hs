@@ -112,7 +112,7 @@ llvmType x = case x of
   where
     tint = A.IntegerType . fromIntegral
   
-data Type = TSInt Integer | TUInt Integer | TDouble deriving (Show, Eq, Ord, Generic)
+data Type = TSInt Integer | TUInt Integer | TDouble | TAggregate deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
 
 llvmOp :: Type -> Op -> ([Operand] -> A.Instruction)
@@ -150,10 +150,10 @@ llvmOperand x = case x of
   Int t a -> ConstantOperand $ case t of
     TUInt b -> C.Int (fromIntegral b) a
     TSInt b -> C.Int (fromIntegral b) a
-    _ -> unused
+    _ -> unused "llvmOperand:Int"
   Rat t a -> ConstantOperand $ C.Float $ case t of
     TDouble -> F.Double $ fromRational a
-    _ -> unused
+    _ -> unused "llvmOperand:Rat"
   FVar a -> ref a
   BVar a -> ref a
   UVar a -> ref a
@@ -234,12 +234,16 @@ instance Typed Exp where
     EOp _ a bs -> typeofOp a $ head bs
     ESwitch _ _ _ d -> typeof d
     EWhile _ _ _ d -> typeof d
+    EPhi a _ -> typeof a
+    EWhile'{} -> TAggregate
 
 data Exp
   = EAExp AExp
   | EOp NumBV Op [Exp]
   | ESwitch NumBV Exp [Exp] Exp
   | EWhile NumBV Exp (Tree (Phi Exp)) Exp
+  | EWhile' NumBV Exp (Tree (Phi Exp))
+  | EPhi Bound Exp
   deriving (Show, Eq)
 
 instance Typed CExp where typeof = typeof . fromCExp
@@ -251,6 +255,8 @@ data CExp
   | COp Op [AExp]
   | CSwitch AExp [AExp] AExp
   | CWhile AExp [Phi AExp] AExp
+  | CWhile' AExp [Phi AExp]
+  | CPhi Bound AExp
   deriving (Show, Eq, Generic, Ord)
 instance Hashable CExp
 
@@ -294,7 +300,7 @@ pushTerm x = modify $ \st ->
   st{ blocks = let b:bs = blocks st in b{ term = x, insns = reverse $ insns b } : bs }
 
 pushLabel :: Label -> [(Either Free Bound, [(AExp, Label)])] -> N ()
-pushLabel lbl ps = modify $ \st -> st{ blocks = Block lbl ps [] unused : blocks st }
+pushLabel lbl ps = modify $ \st -> st{ blocks = Block lbl ps [] (unused "pushLabel") : blocks st }
 
 freshLabel :: N Label
 freshLabel = do
@@ -331,7 +337,7 @@ compute x = case x of
           return (vb, l)
         pushLabel end [(Left n, vps)]
         ok x
-      CWhile a bs c -> do
+      CWhile' a bs -> do
         vbs0 <- mapM compute $ map (fst . snd) bs
         pre <- currentLabel
         [begin, body, end] <- sequence $ replicate 3 freshLabel
@@ -349,8 +355,11 @@ compute x = case x of
         pushTerm $ Switch va [end] body
 
         pushLabel end []
-        compute c
-        ok c
+        ok $ Int (TSInt 42) 42 -- the value here doesn't matter, just prevents recomputation
+      CPhi a b -> do
+        _ <- compute b
+        ok $ BVar a
+      
   UVar a -> do
     modify $ \st -> st{ uvars = S.insert a $ uvars st }
     return x
@@ -384,6 +393,9 @@ fromCExp x = case x of
   CSwitch a bs c -> ESwitch 0 (EAExp a) (map EAExp bs) (EAExp c)
   CWhile a bs c ->
     EWhile 0 (EAExp a) (Node $ flip fmap bs $ \(v, (p, q)) -> Leaf (v, (EAExp p, EAExp q))) (EAExp c)
+  CWhile' a bs ->
+    EWhile' 0 (EAExp a) (Node $ flip fmap bs $ \(v, (p, q)) -> Leaf (v, (EAExp p, EAExp q)))
+  CPhi a b -> EPhi a $ EAExp b
 
 instance PP CExp where pp = pp . fromCExp
   
@@ -478,6 +490,9 @@ cexp x = case x of
   ESwitch _ b cs d -> CSwitch <$> aexp b <*> mapM aexp cs <*> aexp d
   EWhile _ a bs c -> CWhile <$> aexp a <*> mapM f (toList bs) <*> aexp c
     where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
+  EWhile' _ a bs -> CWhile' <$> aexp a <*> mapM f (toList bs)
+    where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
+  EPhi a b -> CPhi a <$> aexp b
 
 instance PP Block where
   pp (Block a b c d) = vcat [pp a, nest 2 $ vcat $ map pp b ++ map pp c ++ [pp d]]
@@ -492,6 +507,8 @@ instance PP Exp where
     EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
     EAExp a -> pp a
     EWhile _ a bs c -> parens $ vcat [text "while", nest 2 $ vcat [pp a, pp bs, pp c]]
+    EWhile' _ a bs -> parens $ vcat [text "while'", nest 2 $ vcat [pp a, pp bs]]
+    EPhi a b -> parens (pp a <+> pp b)
 
 instance (Foldable t, PP a) => PP (t a) where pp = pp . toList
 
@@ -515,6 +532,8 @@ maxBV x = case x of
   EOp i _ _ -> i
   EAExp _ -> 0
   EWhile i _ _ _ -> i
+  EWhile' i _ _ -> i
+  EPhi _ b -> maxBV b
 
 binop :: Op -> Exp -> Exp -> Exp
 binop o x y = EOp (maximumBV [x,y]) o [x,y]
@@ -522,23 +541,7 @@ binop o x y = EOp (maximumBV [x,y]) o [x,y]
 unop :: Op -> Exp -> Exp
 unop o x = EOp (maxBV x) o [x]
 
-unused = error "unused"
-
--- instance Real AExp where
---   toRational x = case x of
---     Rat _ a -> a
---     Int _ a -> toRational a
---     _ -> unused
-
--- instance Integral AExp where
---   toInteger x = case x of
---     Int _ a -> a
---     _ -> unused
---   quotRem = unused
-  
--- instance Enum AExp where
---   toEnum = unused
---   fromEnum = unused
+unused = error . (++) "unused:"
 
 switch :: Exp -> [Exp] -> Exp -> Exp
 switch x ys z = ESwitch (maximumBV $ x : z : ys) x ys z
@@ -551,6 +554,17 @@ while xs f = EWhile (n + m) e (zipTree vs $ zipTree xs ys) r
   where
     m = genericLength $ toList xs
     (e, ys, r) = f $ fmap (EAExp . BVar) vs
+    vs :: Tree Bound
+    vs = snd $ mapAccumR (\(w:ws) x -> (ws, Bound (typeof x) $ n + w)) [0..] xs
+    n = maximumBV (e : toList xs ++ toList ys)
+
+while' :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
+while' xs f = fmap (\(v, _) -> EPhi v $ EWhile' (n + m) e t) t
+  -- ^ BAL: identify unused loop variables (remove(warning?) or error)
+  where
+    t = zipTree vs $ zipTree xs ys
+    m = genericLength $ toList xs
+    (e, ys) = f $ fmap (EAExp . BVar) vs
     vs :: Tree Bound
     vs = snd $ mapAccumR (\(w:ws) x -> (ws, Bound (typeof x) $ n + w)) [0..] xs
     n = maximumBV (e : toList xs ++ toList ys)
@@ -621,5 +635,5 @@ runBlocks :: (AExp, MapR Integer CExp) -> ([User], [Block])
 runBlocks (x, y) = (sort $ S.toList $ uvars st, sortByCompare label $ blocks st)
   where
     st = execState (compute x >>= pushTerm . Return) $
-           St [Block 0 [] [] unused] 1 S.empty $
+           St [Block 0 [] [] $ unused "runBlocks"] 1 S.empty $
            array (0, pred $ next y) $ map swap $ M.toList $ hmapR y
