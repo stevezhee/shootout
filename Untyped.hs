@@ -233,16 +233,14 @@ instance Typed Exp where
     EAExp a -> typeof a
     EOp _ a bs -> typeofOp a $ head bs
     ESwitch _ _ _ d -> typeof d
-    EWhile _ _ _ d -> typeof d
+    EWhile{} -> TAggregate
     EPhi a _ -> typeof a
-    EWhile'{} -> TAggregate
 
 data Exp
   = EAExp AExp
   | EOp NumBV Op [Exp]
   | ESwitch NumBV Exp [Exp] Exp
-  | EWhile NumBV Exp (Tree (Phi Exp)) Exp
-  | EWhile' NumBV Exp (Tree (Phi Exp))
+  | EWhile NumBV Exp (Tree (Phi Exp))
   | EPhi Bound Exp
   deriving (Show, Eq)
 
@@ -254,8 +252,7 @@ data CExp
   = CAExp AExp
   | COp Op [AExp]
   | CSwitch AExp [AExp] AExp
-  | CWhile AExp [Phi AExp] AExp
-  | CWhile' AExp [Phi AExp]
+  | CWhile AExp [Phi AExp]
   | CPhi Bound AExp
   deriving (Show, Eq, Generic, Ord)
 instance Hashable CExp
@@ -337,7 +334,7 @@ compute x = case x of
           return (vb, l)
         pushLabel end [(Left n, vps)]
         ok x
-      CWhile' a bs -> do
+      CWhile a bs -> do
         vbs0 <- mapM compute $ map (fst . snd) bs
         pre <- currentLabel
         [begin, body, end] <- sequence $ replicate 3 freshLabel
@@ -391,10 +388,8 @@ fromCExp x = case x of
   CAExp a -> EAExp a
   COp a bs -> EOp 0 a $ map EAExp bs
   CSwitch a bs c -> ESwitch 0 (EAExp a) (map EAExp bs) (EAExp c)
-  CWhile a bs c ->
-    EWhile 0 (EAExp a) (Node $ flip fmap bs $ \(v, (p, q)) -> Leaf (v, (EAExp p, EAExp q))) (EAExp c)
-  CWhile' a bs ->
-    EWhile' 0 (EAExp a) (Node $ flip fmap bs $ \(v, (p, q)) -> Leaf (v, (EAExp p, EAExp q)))
+  CWhile a bs ->
+    EWhile 0 (EAExp a) (Node $ flip fmap bs $ \(v, (p, q)) -> Leaf (v, (EAExp p, EAExp q)))
   CPhi a b -> EPhi a $ EAExp b
 
 instance PP CExp where pp = pp . fromCExp
@@ -488,9 +483,7 @@ cexp x = case x of
   EAExp a -> return $ CAExp a
   EOp _ b cs -> COp b <$> mapM aexp cs
   ESwitch _ b cs d -> CSwitch <$> aexp b <*> mapM aexp cs <*> aexp d
-  EWhile _ a bs c -> CWhile <$> aexp a <*> mapM f (toList bs) <*> aexp c
-    where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
-  EWhile' _ a bs -> CWhile' <$> aexp a <*> mapM f (toList bs)
+  EWhile _ a bs -> CWhile <$> aexp a <*> mapM f (toList bs)
     where f (v, (p, q)) = pair v <$> (pair <$> aexp p <*> aexp q)
   EPhi a b -> CPhi a <$> aexp b
 
@@ -506,8 +499,7 @@ instance PP Exp where
     ESwitch _ a bs c -> ppSwitch a bs c
     EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
     EAExp a -> pp a
-    EWhile _ a bs c -> parens $ vcat [text "while", nest 2 $ vcat [pp a, pp bs, pp c]]
-    EWhile' _ a bs -> parens $ vcat [text "while'", nest 2 $ vcat [pp a, pp bs]]
+    EWhile _ a bs -> parens $ vcat [text "while", nest 2 $ vcat [pp a, pp bs]]
     EPhi a b -> parens (pp a <+> pp b)
 
 instance (Foldable t, PP a) => PP (t a) where pp = pp . toList
@@ -531,8 +523,7 @@ maxBV x = case x of
   ESwitch i _ _ _ -> i
   EOp i _ _ -> i
   EAExp _ -> 0
-  EWhile i _ _ _ -> i
-  EWhile' i _ _ -> i
+  EWhile i _ _ -> i
   EPhi _ b -> maxBV b
 
 binop :: Op -> Exp -> Exp -> Exp
@@ -548,18 +539,8 @@ switch x ys z = ESwitch (maximumBV $ x : z : ys) x ys z
 
 var t = EAExp . UVar . User t
     
-while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp, Exp)) -> Exp
-while xs f = EWhile (n + m) e (zipTree vs $ zipTree xs ys) r
-  -- ^ BAL: identify unused loop variables (remove(warning?) or error)
-  where
-    m = genericLength $ toList xs
-    (e, ys, r) = f $ fmap (EAExp . BVar) vs
-    vs :: Tree Bound
-    vs = snd $ mapAccumR (\(w:ws) x -> (ws, Bound (typeof x) $ n + w)) [0..] xs
-    n = maximumBV (e : toList xs ++ toList ys)
-
-while' :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
-while' xs f = fmap (\(v, _) -> EPhi v $ EWhile' (n + m) e t) t
+while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
+while xs f = fmap (\(v, _) -> EPhi v $ EWhile (n + m) e t) t
   -- ^ BAL: identify unused loop variables (remove(warning?) or error)
   where
     t = zipTree vs $ zipTree xs ys
