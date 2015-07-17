@@ -19,7 +19,8 @@ a.exe : t.s main.c
 # %.out : %.exe
 # 	./$< 100 > $@
 
-# nbody.exe : nbody.c
+nbody.exe : nbody.c
+	clang -o $@ $^ -lm
 # 	${GCC}
 
 # gen.c : NBody.hs

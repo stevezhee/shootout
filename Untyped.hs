@@ -57,6 +57,7 @@ instance Functor Tree where
     Leaf a -> Leaf $ f a
     Node ns -> Node $ fmap (fmap f) ns
 
+llvmFunction :: (A.Type, String, [User], [BasicBlock]) -> Definition
 llvmFunction (t, n, us, bs) = GlobalDefinition functionDefaults
   { returnType = t
   , name = Name n
@@ -64,11 +65,21 @@ llvmFunction (t, n, us, bs) = GlobalDefinition functionDefaults
   , basicBlocks = bs
   }
 
+llvmSqrt = "llvm.sqrt.f64"
+
+llvmIntrinsic (a, b, cs) = (llvmType a, b, [User t i | (t,i) <- zip cs [0..]], [])
+
+intrinsics :: [(Type, String, [Type])]
+intrinsics =
+  [(TDouble, llvmSqrt, [TDouble])]
+
 llvmFilename = "t.ll"
 llvmModule xs = A.defaultModule
   { moduleName = llvmFilename
-  , moduleDefinitions = map llvmFunction xs
+  , moduleDefinitions = map llvmFunction $ bs ++ xs
   }
+  where
+  bs = map llvmIntrinsic intrinsics
 
 ppName :: PP a => a -> Name
 ppName = Name . show . pp
@@ -130,7 +141,7 @@ llvmOp t x = case x of
   Lt -> ucmp IP.ULT IP.SLT FP.OLT
   Gte -> ucmp IP.UGE IP.SGE FP.OGE
   Lte -> ucmp IP.ULE IP.SLE FP.OLE
-  Sqrt -> uunary (unused "Sqrt:unsigned") (unused "Sqrt:signed") (call1 "llvm.sqrt")
+  Sqrt -> uunary (unused "Sqrt:unsigned") (unused "Sqrt:signed") (call1 llvmSqrt)
   _ -> error $ "llvmOp:" ++ show x
   where
     nowrap f = f True True
@@ -148,7 +159,7 @@ llvmOp t x = case x of
       TDouble -> h a b []
     cmp f g = ucmp f f g
     ucmp f g h = ubinary (A.ICmp f) (A.ICmp g) (A.FCmp h)
-    call n bs = A.Call False CC.C [] (Right $ LocalReference (llvmType t) $ Name n) (map (flip pair []) bs) []
+    call n bs = A.Call False CC.C [] (Right $ ConstantOperand $ C.GlobalReference (llvmType t) $ Name n) (map (flip pair []) bs) []
     call1 n b = call n [b]
 
 llvmOperand :: AExp -> Operand
