@@ -35,9 +35,6 @@ gte = binop Gte
 lte :: (EType a, Ord a) => E a -> E a -> E Bool
 lte = binop Lte
 
-switch :: (EType a, EType b) => E a -> [E b] -> E b -> E b
-switch a bs c = E $ U.switch (unE a) (map unE bs) (unE c)
-
 class Aggregate a where
   agg :: Tree U.Exp -> a
   unAgg :: a -> Tree U.Exp
@@ -57,6 +54,11 @@ instance (Aggregate a, Aggregate b, Aggregate c) => Aggregate (a, b, c) where
 instance (Aggregate a) => Aggregate [a] where
   agg (Node xs) = map agg xs
   unAgg xs = Node $ map unAgg xs
+
+switch :: (EType a, Aggregate b) => E a -> [b] -> b -> b
+switch a bs c = agg $ U.switch (unE a) (map unAgg bs) (unAgg c)
+
+max x y = ife (x `gte` y) x y
 
 while :: (Aggregate a) => a -> (a -> (E Bool, a)) -> a
 while x f = agg $ U.while (unAgg x) g
