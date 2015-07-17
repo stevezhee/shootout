@@ -87,7 +87,8 @@ llvmPhi :: (Either Free Bound, [(AExp, Label)]) -> Named A.Instruction
 llvmPhi (x, ys) =
   llvmName x := A.Phi (llvmTypeof x) (map (mapPair llvmOperand llvmName) ys) []
   
-llvmInsn (x, (y, zs)) = llvmName x := (llvmOp (typeof x) y) (map llvmOperand zs)
+llvmInsn :: (Free, (Op, [AExp])) -> Named A.Instruction
+llvmInsn (x, (y, zs)) = llvmName x := (llvmOp (typeof $ head zs) y) (map llvmOperand zs)
 
 class Typed a where typeof :: a -> Type
 
