@@ -89,12 +89,10 @@ instance LLVMName Label where  llvmName (Label a) = UnName $ fromIntegral a
 instance LLVMName Free where llvmName = ppName
 instance LLVMName Bound where llvmName = ppName
 instance LLVMName User where llvmName = ppName
-instance (LLVMName a, LLVMName b) => LLVMName (Either a b) where
-  llvmName = either llvmName llvmName
 
 mapPair f g (x,y) = (f x, g y)
 
-llvmPhi :: (Either Free Bound, [(AExp, Label)]) -> Named A.Instruction
+llvmPhi :: (Bound, [(AExp, Label)]) -> Named A.Instruction
 llvmPhi (x, ys) =
   llvmName x := A.Phi (llvmTypeof x) (map (mapPair llvmOperand llvmName) ys) []
   
@@ -103,7 +101,6 @@ llvmInsn (x, (y, zs)) = llvmName x := (llvmOp (typeof $ head zs) y) (map llvmOpe
 
 class Typed a where typeof :: a -> Type
 
-instance (Typed a, Typed b) => Typed (Either a b) where typeof = either typeof typeof
 instance Typed Bound where typeof (Bound a _) = a
 instance Typed User where typeof (User a _) = a
 instance Typed Free where typeof (Free a _) = a
@@ -314,7 +311,7 @@ pushTerm :: Terminator -> N ()
 pushTerm x = modify $ \st ->
   st{ blocks = let b:bs = blocks st in b{ term = x, insns = reverse $ insns b } : bs }
 
-pushLabel :: Label -> [(Either Free Bound, [(AExp, Label)])] -> N ()
+pushLabel :: Label -> [(Bound, [(AExp, Label)])] -> N ()
 pushLabel lbl ps = modify $ \st -> st{ blocks = Block lbl ps [] (unused "pushLabel") : blocks st }
 
 freshLabel :: N Label
@@ -353,7 +350,7 @@ compute x = case x of
           vbs <- mapM compute bs -- BAL: need a 'withMap' function
           l' <- currentLabel
           pushTerm $ Jump end
-          return $ zip (map Right vs) $ zip vbs $ repeat l'
+          return $ zip vs $ zip vbs $ repeat l'
         pushLabel end $ groupByFst $ concat vpss
         ok $ Int (TSInt 42) 42 -- the value here doesn't matter, just prevents recomputation
       CWhile a bs -> do
@@ -367,7 +364,7 @@ compute x = case x of
         from <- currentLabel
         pushTerm $ Jump begin
         
-        pushLabel begin [ (Right r, [(p, pre), (q, from)])
+        pushLabel begin [ (r, [(p, pre), (q, from)])
                         | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1
                         ]
         va <- compute a
@@ -587,11 +584,6 @@ zipTree (Node xs) (Node ys) = Node $ map (uncurry zipTree) $ zip xs ys
 zipTree (Leaf a) (Leaf b) = Leaf (a,b)
 zipTree _ _ = Node []
 
-instance (PP a, PP b) => PP (Either a b) where
-  pp x = case x of
-    Left a -> pp a
-    Right b -> pp b
-
 data MapR a b = MapR
   { hmapR :: M.HashMap b a
   , next :: a
@@ -618,7 +610,7 @@ instance PP Terminator where
 
 data Block = Block
   { label :: Label
-  , phis :: [(Either Free Bound, [(AExp, Label)])]
+  , phis :: [(Bound, [(AExp, Label)])]
   , insns :: [(Free, (Op, [AExp]))]
   , term :: Terminator
   } deriving Show
