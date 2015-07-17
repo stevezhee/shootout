@@ -14,11 +14,15 @@ typedef struct
   double mass;
 } body_t;
 
+  // #define FASTPOW
+#ifdef FASTPOW
 int foo(int, unsigned int);
+#else
+double foo(double);
+#endif
 
 int main(int argc, char ** argv)
 {
-#define FASTPOW
 #ifdef FASTPOW
   if(argc < 2)
     {
@@ -30,9 +34,17 @@ int main(int argc, char ** argv)
   printf("%d\n", foo(n, m));
   return 0;
 #else
-  int n = atoi(argv[1]);
-
-#include "gen.c"
+  if(argc < 1)
+    {
+      printf("need an argument\n");
+      return 0;
+    }
+  double n = atof(argv[1]);
+  double m = foo(n);
+  printf("%f\n", m);
   return 0;
+
+  // #include "gen.c"
+  //  return 0;
 #endif
 }

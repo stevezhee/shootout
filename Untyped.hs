@@ -31,6 +31,7 @@ import LLVM.General.AST hiding
 import qualified LLVM.General.AST as A
 import LLVM.General.AST.Global
 import qualified LLVM.General.AST.Constant as C
+import qualified LLVM.General.AST.CallingConvention as CC
 import qualified LLVM.General.AST.IntegerPredicate as IP
 import qualified LLVM.General.AST.FloatingPointPredicate as FP
 import qualified LLVM.General.AST.Float as F
@@ -117,43 +118,48 @@ instance Hashable Type
 
 llvmOp :: Type -> Op -> ([Operand] -> A.Instruction)
 llvmOp t x = case x of
-  Add -> arith (nowrap A.Add) (fast A.FAdd)
-  Sub -> arith (nowrap A.Sub) (fast A.FSub)
-  Mul -> arith (nowrap A.Mul) (fast A.FMul)
-  Quot -> uarith (exct A.UDiv) (exct A.SDiv) (fast A.FDiv)
-  Rem -> uarith A.URem A.SRem (fast A.FRem)
+  Add -> binary (nowrap A.Add) (fast A.FAdd)
+  Sub -> binary (nowrap A.Sub) (fast A.FSub)
+  Mul -> binary (nowrap A.Mul) (fast A.FMul)
+  Quot -> ubinary (exct A.UDiv) (exct A.SDiv) (fast A.FDiv)
+  Rem -> ubinary A.URem A.SRem (fast A.FRem)
   Eq -> cmp IP.EQ FP.OEQ
   Ne -> cmp IP.NE FP.ONE
   Gt -> ucmp IP.UGT IP.SGT FP.OGT
   Lt -> ucmp IP.ULT IP.SLT FP.OLT
   Gte -> ucmp IP.UGE IP.SGE FP.OGE
   Lte -> ucmp IP.ULE IP.SLE FP.OLE
+  Sqrt -> uunary (unused "Sqrt:unsigned") (unused "Sqrt:signed") (call1 "llvm.sqrt")
+  _ -> error $ "llvmOp:" ++ show x
   where
     nowrap f = f True True
     fast f = f UnsafeAlgebra
     exct f = f False
-    arith f g = uarith f f g
-    uarith f g h = \[a,b] -> case t of
+    binary f g = ubinary f f g
+    uunary f g h = \[a] -> case t of
+      TUInt{} -> f a []
+      TSInt{} -> g a []
+      TDouble -> h a []
+
+    ubinary f g h = \[a,b] -> case t of
       TUInt{} -> f a b []
       TSInt{} -> g a b []
       TDouble -> h a b []
     cmp f g = ucmp f f g
-    ucmp f g h = uarith (A.ICmp f) (A.ICmp g) (A.FCmp h)
+    ucmp f g h = ubinary (A.ICmp f) (A.ICmp g) (A.FCmp h)
+    call n bs = A.Call False CC.C [] (Right $ LocalReference (llvmType t) $ Name n) (map (flip pair []) bs) []
+    call1 n b = call n [b]
 
-foo x y = case x of
-  TSInt a -> C.Int (fromIntegral a) y
-  TUInt a -> C.Int (fromIntegral a) y
-  TDouble -> C.Float $ F.Double $ fromIntegral y
-  
 llvmOperand :: AExp -> Operand
 llvmOperand x = case x of
   Int t a -> ConstantOperand $ case t of
     TUInt b -> C.Int (fromIntegral b) a
     TSInt b -> C.Int (fromIntegral b) a
-    _ -> unused "llvmOperand:Int"
+    TDouble -> C.Float $ F.Double $ fromIntegral a
+    _ -> unused $ "llvmOperand:Int:" ++ show t
   Rat t a -> ConstantOperand $ C.Float $ case t of
     TDouble -> F.Double $ fromRational a
-    _ -> unused "llvmOperand:Rat"
+    _ -> unused $ "llvmOperand:Rat:" ++ show t
   FVar a -> ref a
   BVar a -> ref a
   UVar a -> ref a

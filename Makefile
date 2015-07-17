@@ -8,7 +8,7 @@ t.ll : Main.hs Shoot.hs Untyped.hs
 	llc $^
 
 a.exe : t.s main.c
-	clang main.c t.s
+	clang -g main.c t.s
 
 # GCC = gcc -O2 -o $@ $< -lm
 
