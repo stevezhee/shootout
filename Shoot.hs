@@ -111,7 +111,7 @@ instance (EType a, Fractional a) => Fractional (E a) where
 
 instance (EType a, Floating a) => Floating (E a) where
   pi = 3.141592653589793 -- BAL: use prelude value of pi?
-  sqrt = id -- BAL: unop Sqrt
+  sqrt = unop Sqrt
   exp = unop Exp
   log = unop Log
   sin = unop Sin
