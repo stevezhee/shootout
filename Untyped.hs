@@ -139,8 +139,12 @@ llvmOp t x = case x of
   Gte -> ucmp IP.UGE IP.SGE FP.OGE
   Lte -> ucmp IP.ULE IP.SLE FP.OLE
   Sqrt -> uunary (unused "Sqrt:unsigned") (unused "Sqrt:signed") (call1 llvmSqrt)
+  SubR -> rev Sub
+  QuotR -> rev Quot
+  RemR -> rev Rem
   _ -> error $ "llvmOp:" ++ show x
   where
+    rev o = \[a,b] -> llvmOp t o [b,a]
     nowrap f = f True True
     fast f = f UnsafeAlgebra
     exct f = f False
@@ -215,7 +219,9 @@ instance Hashable Label
 instance PP Label where pp (Label a) = text "L" <> integer a
 
 data Op
-  = Add | Sub | Mul | Quot | Rem
+  = Add | Mul
+  | Sub | Quot | Rem
+  | SubR | QuotR | RemR
   | Eq | Ne
   | Gt | Lt | Gte | Lte
   | Abs | Signum
@@ -230,7 +236,7 @@ instance PP Rational where pp = rational
 
 type NumBV = Integer
 
-data AExp
+data AExp -- don't reorder
   = Int Type Integer
   | Rat Type Rational
   | FVar Free
@@ -240,9 +246,11 @@ data AExp
 instance Hashable AExp
 
 typeofOp x y
-  | x `elem` [Eq, Ne, Gt, Lt, Gte, Lte] = TUInt 1
+  | x `elem` [Eq, Ne, Gt, Lt, Gte, Lte] = tbool
   | otherwise = typeof y
-  
+
+tbool = TUInt 1
+
 instance Typed Exp where
   typeof x = case x of
     EAExp a -> typeof a
@@ -420,71 +428,153 @@ instance PP CExp where pp = pp . fromCExp
 aexp :: Exp -> M AExp
 aexp x = cexp x >>= toAExp
 
-isConst :: AExp -> Bool
+-- evalOpRat :: Op -> [Rational] -> Rational
+-- evalOpRat x ys = case x of
+--   Add -> a + b
+--   Sub -> a - b
+--   Mul -> a * b
+--   Quot -> a / b
+--   Sqrt -> toRational (sqrt (fromRational a) :: Double)
+--   _ -> error $ "evalOpRat:" ++ show (x,ys)
+--   where
+--     a = head ys
+--     b = head $ tail ys
+
+-- evalOpInt :: Op -> [Integer] -> Integer
+-- evalOpInt x ys = case x of
+--   Add -> a + b
+--   Sub -> a - b
+--   Mul -> a * b
+--   Quot -> a `div` b
+--   _ -> error $ "evalOpInt:" ++ show (x,ys)
+--   where
+--     [a,b] = ys
+
+optimize = True
+-- optimize = False
+
+eqConst x y = case x of
+  Rat _ a -> a == toRational y
+  Int _ a -> a == y
+  _ -> False
+
 isConst x = case x of
   Int{} -> True
   Rat{} -> True
   _ -> False
 
-isRat :: AExp -> Bool
-isRat x = case x of
-  Rat{} -> True
-  _ -> False
-
-evalOpRat :: Op -> [Rational] -> Rational
-evalOpRat x ys = case x of
-  Add -> a + b
-  Sub -> a - b
-  Mul -> a * b
-  Quot -> a / b
-  Sqrt -> toRational (sqrt (fromRational a) :: Double)
-  _ -> error $ "evalOpRat:" ++ show (x,ys)
+constFold :: Op -> [AExp] -> AExp
+constFold o xs = case xs of
+  [Int _ a, Int _ b] -> h a b
+  [Rat _ a, Rat _ b] -> i a b
+  [Int _ a] -> f a
+  [Rat _ a] -> g a
+  [a@Rat{}, Int _ b] -> constFold o [a, Rat t $ toRational b]
+  [Int _ a, b@Rat{}] -> constFold o [Rat t $ toRational a, b]
+  _ -> unused "constFold"
   where
-    a = head ys
-    b = head $ tail ys
+  t = typeofOp o $ head xs
+  f :: Integer -> AExp
+  f = case o of
+    Abs -> Int t . abs
+    Signum -> Int t . signum
+    _ -> g . fromInteger
 
-evalOpInt :: Op -> [Integer] -> Integer
-evalOpInt x ys = case x of
-  Add -> a + b
-  Sub -> a - b
-  Mul -> a * b
-  Quot -> a `div` b
-  _ -> error $ "evalOpInt:" ++ show (x,ys)
-  where
-    [a,b] = ys
-
-optimize = True
--- optimize = False
+  g :: Rational -> AExp
+  g = case o of
+    Abs -> Rat t . abs
+    Signum -> Rat t . signum
+    Sqrt -> rToR sqrt
+    Exp -> rToR exp
+    Log -> rToR log
+    Sin -> rToR sin
+    Cos -> rToR cos
+    Asin -> rToR asin
+    Atan -> rToR atan
+    Acos -> rToR acos
+    Sinh -> rToR sinh
+    Cosh -> rToR cosh
+    Asinh -> rToR asinh
+    Atanh -> rToR atanh
+    Acosh -> rToR acosh
+    where
+      rToR f = Rat t . toRational . f . fromRational
+  h :: Integer -> Integer -> AExp
+  h = case o of
+    Add -> iToI (+)
+    Mul -> iToI (*)
+    Sub -> iToI (-)
+    Quot -> iToI quot
+    Rem -> iToI rem
+    Eq -> toB (==)
+    Ne -> toB (/=)
+    Gt -> toB (>)
+    Lt -> toB (<)
+    Gte -> toB (>=)
+    Lte -> toB (<=)
+    where
+      iToI f x = Int t . f x
+  toB :: (a -> a -> Bool) -> a -> a -> AExp
+  toB f x y = Int t $ toInteger $ fromEnum (f x y)
+  i :: Rational -> Rational -> AExp
+  i = case o of
+    Add -> rToR (+)
+    Mul -> rToR (*)
+    Sub -> rToR (-)
+    Quot -> rToR (/)
+    Rem -> unused "Rem" -- BAL:?
+    Eq -> toB (==)
+    Ne -> toB (/=)
+    Gt -> toB (>)
+    Lt -> toB (<)
+    Gte -> toB (>=)
+    Lte -> toB (<=)
+    where
+      rToR f x = Rat t . f x
 
 toAExp :: CExp -> M AExp
 toAExp x = case x of
   CAExp a -> return a
-  -- COp a bs | optimize -> case (a,bs) of
-  --   _ | all isConst bs -> return $ case any isRat bs of
-  --                          True -> Rat $ evalOpRat a $ map toRational bs
-  --                          False -> Int $ evalOpInt a $ map toInteger bs
-  --   (Mul, [Rat 1, p]) -> return p
-  --   (Mul, [Int 1, p]) -> return p
-  --   (Mul, [p, Rat 1]) -> return p
-  --   (Mul, [p, Int 1]) -> return p
-  --   (Mul, [Rat 0, _]) -> return $ Rat 0
-  --   (Mul, [Int 0, _]) -> return $ Int 0
-  --   (Mul, [_, Rat 0]) -> return $ Rat 0
-  --   (Mul, [_, Int 0]) -> return $ Int 0
-  --   (Add, [Rat 0, p]) -> return p
-  --   (Add, [Int 0, p]) -> return p
-  --   (Add, [p, Rat 0]) -> return p
-  --   (Add, [p, Int 0]) -> return p
-  --   (Sub, [p, Rat 0]) -> return p
-  --   (Sub, [p, Int 0]) -> return p
-    -- _ -> ok
+  COp a [b, c] | isConst b && isConst c -> return $ constFold a [b, c]
+  COp Add [b, c] | b `eqConst` 0 -> return c
+  COp Add [b, c] | c `eqConst` 0 -> return b
+  COp Sub [b, c] | b == c -> return zero
+  COp Sub [b, c] | c `eqConst` 0 -> return b
+  COp Mul [b, c] | b `eqConst` 0 || c `eqConst` 0 -> return zero
+  COp Mul [b, c] | b `eqConst` 1 -> return c
+  COp Mul [b, c] | c `eqConst` 1 -> return b
+  COp Quot [b, c] | c `eqConst` 0 -> error "divide by zero"
+  COp Quot [b, c] | c `eqConst` 1 -> return b
+  COp Quot [b, c] | b == c -> return one
+  COp Rem [b, c] | c `eqConst` 0 -> error "remainder by zero"
+  COp Rem [b, c] | c `eqConst` 1 || b == c -> return zero
+  COp a [b, c] | a `elem` [Eq, Gte, Lte] && b == c -> return true
+  COp a [b, c] | a `elem` [Ne, Gt, Lt] && b == c -> return false
   _ -> ok
   where
+    zero = Int (typeof x) 0
+    one = Int (typeof x) 1
+    true = one
+    false = zero
     ok = do
       tbl <- get
-      let (a, tbl') = insertR x tbl
+      let (a, tbl') = insertR (canonCExp x) tbl
       modify $ \_ -> tbl'
       return $ FVar $ Free (typeof x) a
+
+canonCExp x = case x of
+  COp a [b, c] | b > c -> case a of
+    Sub -> f SubR
+    Quot -> f QuotR
+    Rem -> f RemR
+    Gt -> f Lt
+    Lt -> f Gt
+    Gte -> f Lte
+    Lte -> f Gte
+    _ -> f a
+    where
+    f a' = COp a' [c, b]
+  _ -> x
 
 swap (x,y) = (y,x)
 pair x y = (x,y)
