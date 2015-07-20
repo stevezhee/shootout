@@ -145,21 +145,28 @@ void debug_print()
   printf ("%.9f\n", energy(NBODIES, bodies)); // BAL: debug
 }
 
-int main(int argc, char ** argv)
+double foo(int n)
 {
-  int n = atoi(argv[1]);
   int i;
-
   /* debug_print(); */
   offset_momentum(NBODIES, bodies);
   /* debug_print(); */
   //  printf ("%.9f\n", energy(NBODIES, bodies));
-  for (i = 1; i <= n; i++)
+  for (i = 0; i < n; i++)
     advance(NBODIES, bodies, 0.01);
-  /* debug_print(); */
-  printf ("%.9f\n", energy(NBODIES, bodies));
-  return 0;
+  // debug_print();
+  return energy(NBODIES, bodies);
 }
+
+/* int main(int argc, char ** argv) */
+/* { */
+/*   int n = atoi(argv[1]); */
+/*   double m; */
+
+/*   m = foo(n); */
+/*   printf ("%.9f\n", m); */
+/*   return 0; */
+/* } */
 
 /*
 make, command-line, and program output logs

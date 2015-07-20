@@ -185,6 +185,9 @@ _vy = 4
 _vz = 5
 _mass = 6
 
+px_ = updFld _px
+py_ = updFld _py
+pz_ = updFld _pz
 vx_ = updFld _vx
 vy_ = updFld _vy
 vz_ = updFld _vz
@@ -199,27 +202,30 @@ py = getFld _py
 pz = getFld _pz
 
 advance :: E Double -> [Body] -> [Body]
-advance dt = unfoldr (\bs -> if null bs then Nothing else Just $ loop [] (head bs) (tail bs))
+advance dt bs0 = map h $ adv' [] bs0
   where
-    loop rs a [] = (a, reverse rs)
-    loop rs a (b:bs) = let (a', r) = adv a b in loop (r:rs) a' bs
-    adv b b2 =
-      ( vx_ (g dx b2 -) $ vy_ (g dy b2 -) $ vz_ (g dz b2 -) b
-      , vx_ (g dx b +) $ vy_ (g dy b +) $ vz_ (g dz b +) b2
-      )
+    h b = px_ (f vx) $ py_ (f vy) $ pz_ (f vz) b
       where
-        mag = dt / distance^3
-        distance = sqrt (dx^2 + dy^2 + dz^2)
-        dx = f px
-        dy = f py
-        dz = f pz
-        f g = g b - g b2
-        g a b = a * mass b * mag
+        f v = (+) (dt * v b)
+    adv' xs [] = reverse xs
+    adv' xs (b:bs) = let (b':bs') = adv [] b bs in adv' (b':xs) bs'
+    adv xs b [] = b : reverse xs
+    adv xs b (b2:bs) = adv (b2' : xs) b' bs
+      where
+      f d v = v - d * mass b2 * mag
+      g d v = v + d * mass b * mag
+      b' = vx_ (f dx) $ vy_ (f dy) $ vz_ (f dz) b
+      b2' = vx_ (g dx) $ vy_ (g dy) $ vz_ (g dz) b2
+      dx = px b - px b2
+      dy = py b - py b2
+      dz = pz b - pz b2
+      distance = sqrt(dx^2 + dy^2 + dz^2)
+      mag = dt / (distance^3)
 
 energy :: [Body] -> E Double
 energy = sum . map enrgy . init . tails
   where
-    enrgy (b:bs) = 0.5 * mass b * (vx b)^2 * (vy b)^2 * (vz b)^2 - sum (map f bs)
+    enrgy (b:bs) = 0.5 * mass b * ((vx b)^2 + (vy b)^2 + (vz b)^2) - sum (map f bs)
       where
         f b2 = (mass b * mass b2) / (sqrt ((g px)^2 + (g py)^2 + (g pz)^2))
           where g h = h b - h b2
@@ -229,8 +235,9 @@ offset_momentum bs@([a,b,c,_,_,_,d]:_) = [a, b, c, f vx, f vy, f vz, d] : tail b
   where
     f g = -((sum $ map (\b -> g b * mass b) bs) / solar_mass)
     
+nbody :: E Int -> E Double
 nbody n = energy $ snd $
-  while (0, offset_momentum bodies) $ \(x, xs) ->
-    ( x `lt` n
-    , (x + 1, advance 0.01 xs)
+  while (0, offset_momentum bodies) $ \(i, xs) ->
+    ( i `lt` n
+    , (i + 1, advance 0.01 xs)
     )

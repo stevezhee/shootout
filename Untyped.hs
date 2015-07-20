@@ -714,9 +714,9 @@ runCExpMap = flip runState (MapR M.empty 0) . aexp
 compile :: Exp -> IO ()
 compile x = do
   let a = runCExpMap x
-  print $ pp a
+--  print $ pp a
   let (us, bs) = runBlocks a
-  print $ pp bs
+--  print $ pp bs
   llvmAsm [(llvmTypeof $ fst a, "foo", us, map llvmBlock bs)]
 
 llvmAsm xs = do

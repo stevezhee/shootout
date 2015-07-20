@@ -1,4 +1,11 @@
-all : a.exe
+CC = clang -O2 -lm
+
+all : a.exe nbody.exe
+	ls -al $^
+	# ./a.exe 0
+	# ./nbody.exe 0
+	./a.exe 1
+	./nbody.exe 1
 
 t.ll : Main.hs Shoot.hs Untyped.hs
 	stack install
@@ -8,7 +15,7 @@ t.ll : Main.hs Shoot.hs Untyped.hs
 	llc $^
 
 a.exe : t.s main.c
-	clang -g main.c t.s
+	${CC} -o $@ main.c t.s
 
 # GCC = gcc -O2 -o $@ $< -lm
 
@@ -19,8 +26,8 @@ a.exe : t.s main.c
 # %.out : %.exe
 # 	./$< 100 > $@
 
-nbody.exe : nbody.c
-	clang -o $@ $^ -lm
+nbody.exe : nbody.c main.c
+	${CC} -o $@ $^
 # 	${GCC}
 
 # gen.c : NBody.hs
