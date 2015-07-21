@@ -15,11 +15,17 @@ typedef struct
 } body_t;
 
   // #define FASTPOW
-#define NBODY
+//#define NBODY
+#define FANNKUCHREDUX
 /* #if defined(FASTPOW) */
 /* int foo(int, unsigned int); */
 /* #elseif defined(NBODY) */
+#if defined(NBODY)
 double foo(int);
+#endif
+#if defined(FANNKUCHREDUX)
+unsigned int foo(void);
+#endif
 /* #else */
 /* double foo(double); */
 /* #endif */
@@ -36,7 +42,8 @@ int main(int argc, char ** argv)
 /*   unsigned int m = atoi(argv[2]); */
 /*   printf("%d\n", foo(n, m)); */
 /*   return 0; */
-/* #elseif defined(NBODY) */
+
+#if defined(NBODY)
   if(argc < 1)
     {
       printf("need an argument\n");
@@ -46,6 +53,11 @@ int main(int argc, char ** argv)
   double m = foo(n);
   printf ("%.9f\n", m);
   return 0;
+#endif
+#if defined(FANNKUCHREDUX)
+  printf ("%d\n", foo());
+  return 0;
+#endif
 /* #else */
 /*   if(argc < 1) */
 /*     { */

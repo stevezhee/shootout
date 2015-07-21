@@ -722,7 +722,7 @@ compile x = do
 llvmAsm xs = do
   eab <- withContext $ \cxt ->
     runExceptT $ withModuleFromAST cxt (llvmModule xs) moduleLLVMAssembly
-  either error (\s -> putStrLn s >> writeFile llvmFilename s) eab
+  either error (\s -> writeFile llvmFilename s) eab
   
 sortByCompare f = sortBy $ \a b -> compare (f a) (f b)
 

@@ -241,3 +241,14 @@ nbody n = energy $ snd $
     ( i `lt` n
     , (i + 1, advance 0.01 xs)
     )
+
+--------------------------
+fannkuchredux :: (EType a, Ord a, Num a, Num b, EType b) => [E a] -> E b
+fannkuchredux bs0 = fst $ while (0, bs0) $ \(n, bs@(b:_)) ->
+  ( b `ne` 1
+  , ( n + 1
+    , switch (b - 2)
+        [ reverse (take x bs) ++ drop x bs | x <- [2 .. 4] ]
+        (reverse bs)
+    )
+  )

@@ -1,4 +1,4 @@
-CC = clang -O2 -lm
+CC = clang -O3 -lm
 
 all : a.exe nbody.exe
 	ls -al $^
