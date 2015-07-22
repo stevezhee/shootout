@@ -6,7 +6,12 @@ import Data.Word
 
 main :: IO ()
 main = compile $
-  rotate list0 (var 0)
+  fst $ nextPerm $ nextPerm perm0
+  -- fst perm0
+  -- updix list0 (var 0) (+ 1)
+  -- setix list0 (var 0) 2
+  -- getix list0 (var 0)
+--  rotate list0 (var 0)
 --  (fannkuchredux ([4,2,1,5,3] :: [E Word]) :: E Word)
 --  nbody (var 0)
 --  sqrt (var 0 :: E Double)

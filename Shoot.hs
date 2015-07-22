@@ -277,14 +277,45 @@ rotate v n = v0 `bor` v1 `bor` v2
     v0 = shl4 n $ lshr4 n v
     v1 = lshr4 ((1 + nelems) - n) $ shl4 (nelems - n) v
     v2 = lshr4 (nelems - n) $ shl4 (nelems - 1) v
-    nelems = 16
 
+nelems = 16
 shl4 x v = shl v (4*x)
 lshr4 x v = lshr v (4*x)
 
 list0 :: E V16W4
 list0 = 0xfedcba987654321
+
+getix v i = lshr4 15 $ shl4 (nelems - 1 - i) v
+setix v i x = v0 `bor` v1 `bor` v2
+  where
+    v0 = shl4 (i + 1) $ lshr4 (i + 1) v
+    v1 = shl4 i x
+    v2 = lshr4 (nelems - i) $ shl4 (nelems - i) v
+
+updix v i f = setix v i $ f $ getix v i
+
+-- BAL: restructure for 0 based indexing
+nextPerm :: (E V16W4, (E V16W4, E Word64)) -> (E V16W4, (E V16W4, E Word64))
+nextPerm pci = (rotate p i, (updix c (i - 1) (+ 1), 2))
+  where
+  (p, (c, i)) = while pci $ \(p,(c,i)) ->
+    ( getix c (i - 1) `gte` i
+    , (rotate p i, (setix c (i - 1) 1, i + 1))
+    )
+
+perm0 :: (E V16W4, (E V16W4, E Word64))
+perm0 = (list0, (0x1111111111111111, 2))
+
 {-
+
+-- BAL: use 0 based indexing
+nextPerm (p0,c0,i0) = (rotate i p, upd c i succ, 2) -- upd c (i - 1)
+  where
+  (p, c, i) = while (p0, c0, i0) $ \(p,c,i) ->
+    ( c !! (i - 1) >= i
+    , (rotate i p, upd c i (const 1), i + 1) -- upd c (i - 1)
+    )
+
 upd :: [Int] -> Int -> (Int -> Int) -> [Int]
 upd c i f = let (l,r:rs) = splitAt (i-1) c in l ++ [f r] ++ rs
                 
@@ -298,13 +329,6 @@ while :: a -> (a -> (Bool, a)) -> a
 while a f = case f a of
   (True, a') -> while a' f
   (False, _) -> a
-  
-nextPerm (p0,c0,i0) = (rotate i p, upd c i succ, 2)
-  where
-  (p, c, i) = while (p0, c0, i0) $ \(p,c,i) ->
-    ( c !! (i - 1) >= i
-    , (rotate i p, upd c i (const 1), i + 1)
-    )
 
 perm0 n = (xs, replicate (length xs) 1, 2) where xs = [1 .. n]
 
