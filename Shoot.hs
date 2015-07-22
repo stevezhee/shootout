@@ -280,16 +280,21 @@ list0 = 0xfedcba987654321
 
 getix v i = lshr4 i v `band` 0xf
 
-setix v i x = v `xor` ((v `xor` shl4 i x) `band` (shl4 i 0xf))
+setix v i x = maskMerge v (shl4 i x) (shl4 i 0xf)
+
+maskMerge x y mask = x `xor` ((x `xor` y) `band` mask) -- from graphics.stanford.edu bithacks.html
 
 updix v i f = setix v i $ f $ getix v i
 
+maxV16W4 :: E V16W4
+maxV16W4 = 0xffffffffffffffff
+
 rotate :: E V16W4 -> E V16W4 -> E V16W4
-rotate v n = v0 `bor` v1 `bor` v2
+rotate v n = maskMerge (maskMerge v1 v2 (shl4 (n - 1) 0xf)) v mask
   where
-    v0 = shl4 n $ lshr4 n v
-    v1 = lshr4 ((1 + nelems) - n) $ shl4 (nelems - n) v
-    v2 = lshr4 (nelems - n) $ shl4 (nelems - 1) v
+    v1 = lshr4 1 v
+    v2 = shl4 (n - 1) v
+    mask = shl4 n maxV16W4
 
 -- BAL: restructure for 0 based indexing
 nextPerm :: (E V16W4, (E V16W4, E Word64)) -> (E V16W4, (E V16W4, E Word64))
