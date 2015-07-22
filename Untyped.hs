@@ -255,9 +255,9 @@ type NumBV = Integer
 data AExp -- don't reorder
   = Int Type Integer
   | Rat Type Rational
-  | FVar Free
-  | BVar Bound
   | UVar User
+  | BVar Bound
+  | FVar Free
   deriving (Show, Eq, Generic, Ord)
 instance Hashable AExp
 
@@ -336,7 +336,8 @@ pushTerm x = modify $ \st ->
   st{ blocks = let b:bs = blocks st in b{ term = x, insns = reverse $ insns b } : bs }
 
 pushLabel :: Label -> [(Bound, [(AExp, Label)])] -> N ()
-pushLabel lbl ps = modify $ \st -> st{ blocks = Block lbl ps [] (unused "pushLabel") : blocks st }
+pushLabel lbl ps =
+  modify $ \st -> st{ blocks = Block lbl ps [] (unused "pushLabel") : blocks st }
 
 freshLabel :: N Label
 freshLabel = do
@@ -350,6 +351,8 @@ currentLabel = label . head <$> gets blocks
 groupByFst :: (Eq a, Ord a) => [(a,b)] -> [(a, [b])]
 groupByFst = map (\bs -> (fst $ head bs, map snd bs)) . groupBy (\a b -> fst a == fst b) . sortBy (\a b -> compare (fst a) (fst b))
 
+computes = mapM compute
+  
 compute :: AExp -> N AExp
 compute x = case x of
   FVar n -> do
@@ -360,7 +363,7 @@ compute x = case x of
     case y of
       CAExp a -> return a
       COp a bs -> do
-        vbs <- mapM compute bs
+        vbs <- computes bs
         pushInsn (n, (a,vbs))
         ok x
       CSwitch vs a bss cs -> do
@@ -371,34 +374,36 @@ compute x = case x of
         pushTerm $ Switch va lbls lbl
         vpss <- flip mapM ps $ \(bs,l) -> do
           pushLabel l []
-          vbs <- mapM compute bs -- BAL: need a 'withMap' function
+          vbs <- computes bs -- BAL: need a 'withMap' function
           l' <- currentLabel
           pushTerm $ Jump end
           return $ zip vs $ zip vbs $ repeat l'
         pushLabel end $ groupByFst $ concat vpss
         ok $ Int (TSInt 42) 42 -- the value here doesn't matter, just prevents recomputation
       CWhile a bs -> do
-        vbs0 <- mapM compute $ map (head . snd) bs
+        vbs0 <- computes $ map (head . snd) bs
         pre <- currentLabel
-        [begin, body, end] <- sequence $ replicate 3 freshLabel
+        [begin, test, body, end] <- sequence $ replicate 4 freshLabel
         pushTerm $ Jump begin
+
+        pushLabel test []
+        va <- compute a
+        pushTerm $ Switch va [end] body
         
         pushLabel body []
-        vbs1 <- mapM compute $ map (last . snd) bs
+        vbs1 <- computes $ map (last . snd) bs
         from <- currentLabel
         pushTerm $ Jump begin
         
-        pushLabel begin [ (r, [(p, pre), (q, from)])
+        pushLabel begin
+          [ (r, [(p, pre), (q, from)])
                         | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1
                         ]
-        va <- compute a
-        pushTerm $ Switch va [end] body
+        pushTerm $ Jump test
 
         pushLabel end []
         ok $ Int (TSInt 42) 42 -- the value here doesn't matter, just prevents recomputation
-      CPhi a b -> do
-        _ <- compute b
-        ok $ BVar a
+      CPhi a b -> compute b >>= \_ -> ok $ BVar a
       
   UVar a -> do
     modify $ \st -> st{ uvars = S.insert a $ uvars st }
