@@ -14,6 +14,24 @@ typedef struct
   double mass;
 } body_t;
 
+void print_v16w4(uint64_t x)
+{
+  uint64_t d;
+
+  printf("[");
+  /* while((d = x & 0xf) != 0) */
+  /*   { */
+  /*     printf("%lu;",d); */
+  /*     x >>= 4; */
+  /*   } */
+  while(x != 0)
+    {
+      d = x & 0xf;
+      printf("%lu;",d);
+      x >>= 4;
+    }
+  printf("]\n");
+}
   // #define FASTPOW
 //#define NBODY
 #define FANNKUCHREDUX
@@ -24,7 +42,8 @@ typedef struct
 double foo(int);
 #endif
 #if defined(FANNKUCHREDUX)
-unsigned int foo(void);
+uint64_t foo(uint64_t);
+// foo(void);
 #endif
 /* #else */
 /* double foo(double); */
@@ -55,7 +74,18 @@ int main(int argc, char ** argv)
   return 0;
 #endif
 #if defined(FANNKUCHREDUX)
-  printf ("%d\n", foo());
+  if(argc < 1)
+    {
+      printf("need an argument\n");
+      return 0;
+    }
+  uint n = atoi(argv[1]);
+  if((n < 1) || (n > 15))
+    {
+      printf("need an argument between 1 and 15\n");
+      return 0;
+    }
+  print_v16w4(foo((uint64_t)n));
   return 0;
 #endif
 /* #else */

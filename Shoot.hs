@@ -10,6 +10,7 @@ import Data.List
 data E a = E{ unE :: U.Exp }
 
 instance EType Word where etypeof _ = TUInt 32
+instance EType Word64 where etypeof _ = TUInt 64
 instance EType Int where etypeof _ = TSInt 32
 instance EType Double where etypeof _ = TDouble
 instance EType Bool where etypeof _ = TUInt 1
@@ -25,6 +26,19 @@ compile (E x) = U.compile x
 
 eq :: (EType a, Ord a) => E a -> E a -> E Bool
 eq = binop Eq
+band :: (EType a, Integral a) => E a -> E a -> E a
+band = binop And
+bor :: (EType a, Integral a) => E a -> E a -> E a
+bor = binop Or
+xor :: (EType a, Integral a) => E a -> E a -> E a
+xor = binop Xor
+lshr :: (EType a, Integral a) => E a -> E a -> E a
+lshr = binop Lshr
+ashr :: (EType a, Integral a) => E a -> E a -> E a
+ashr = binop Ashr
+shl :: (EType a, Integral a) => E a -> E a -> E a
+shl = binop Shl
+
 ne :: (EType a, Ord a) => E a -> E a -> E Bool
 ne = binop Ne
 gt :: (EType a, Ord a) => E a -> E a -> E Bool
@@ -85,7 +99,9 @@ instance (EType a, Num a) => Num (E a) where
 -- instance (EType a, Eq a) => Eq (E a) where (==) = error "(==)"
 instance (EType a, Enum a, Num a) => Enum (E a) where
   toEnum = fromInteger . fromIntegral
-  fromEnum = error "fromEnum"
+  fromEnum x = case unE x of
+    EAExp (U.Int _ i) -> fromInteger i
+    _ -> error "fromEnum:E a"
 
 div' :: Integral a => E a -> E a -> E a
 div' = binop Quot
@@ -253,6 +269,21 @@ fannkuchredux bs0 = fst $ while (0, bs0) $ \(n, bs@(b:_)) ->
     )
   )
 
+type V16W4 = Word64
+
+rotate :: E V16W4 -> E V16W4 -> E V16W4
+rotate v n = v0 `bor` v1 `bor` v2
+  where
+    v0 = shl4 n $ lshr4 n v
+    v1 = lshr4 ((1 + nelems) - n) $ shl4 (nelems - n) v
+    v2 = lshr4 (nelems - n) $ shl4 (nelems - 1) v
+    nelems = 16
+
+shl4 x v = shl v (4*x)
+lshr4 x v = lshr v (4*x)
+
+list0 :: E V16W4
+list0 = 0xfedcba987654321
 {-
 upd :: [Int] -> Int -> (Int -> Int) -> [Int]
 upd c i f = let (l,r:rs) = splitAt (i-1) c in l ++ [f r] ++ rs

@@ -6,7 +6,8 @@ import Data.Word
 
 main :: IO ()
 main = compile $
-  (fannkuchredux ([4,2,1,5,3] :: [E Word]) :: E Word)
+  rotate list0 (var 0)
+--  (fannkuchredux ([4,2,1,5,3] :: [E Word]) :: E Word)
 --  nbody (var 0)
 --  sqrt (var 0 :: E Double)
 --  (+) (var 0 :: E Double) (var 0 :: E Double)

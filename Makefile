@@ -4,7 +4,7 @@ all : a.exe nbody.exe
 	ls -al $^
 	# ./a.exe 0
 	# ./nbody.exe 0
-	./a.exe 1
+	./a.exe 4
 	./nbody.exe 1
 
 t.ll : Main.hs Shoot.hs Untyped.hs

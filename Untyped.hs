@@ -39,6 +39,7 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import Data.Foldable
 import Data.Traversable
+import Data.Bits
 
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
 
@@ -130,6 +131,12 @@ llvmOp t x = case x of
   Add -> binary (nowrap A.Add) (fast A.FAdd)
   Sub -> binary (nowrap A.Sub) (fast A.FSub)
   Mul -> binary (nowrap A.Mul) (fast A.FMul)
+  Or -> intop A.Or
+  And -> intop A.And
+  Xor -> intop A.Xor
+  Shl -> intop (wrap A.Shl)
+  Lshr -> intop (notExact A.LShr)
+  Ashr -> intop (notExact A.AShr)
   Quot -> ubinary (exct A.UDiv) (exct A.SDiv) (fast A.FDiv)
   Rem -> ubinary A.URem A.SRem (fast A.FRem)
   Eq -> cmp IP.EQ FP.OEQ
@@ -142,10 +149,16 @@ llvmOp t x = case x of
   SubR -> rev Sub
   QuotR -> rev Quot
   RemR -> rev Rem
+  ShlR -> rev Shl
+  LshrR -> rev Lshr
+  AshrR -> rev Ashr
   _ -> error $ "llvmOp:" ++ show x
   where
+    intop f = binary f $ unused "llvmOp:intop"
+    notExact f = f False
     rev o = \[a,b] -> llvmOp t o [b,a]
     nowrap f = f True True
+    wrap f = f False False
     fast f = f UnsafeAlgebra
     exct f = f False
     binary f g = ubinary f f g
@@ -222,6 +235,9 @@ data Op
   = Add | Mul
   | Sub | Quot | Rem
   | SubR | QuotR | RemR
+  | And | Or | Xor
+  | Shl | Lshr | Ashr
+  | ShlR | LshrR | AshrR
   | Eq | Ne
   | Gt | Lt | Gte | Lte
   | Abs | Signum
@@ -463,6 +479,7 @@ isConst x = case x of
   Rat{} -> True
   _ -> False
 
+-- BAL: constFold bit operations
 constFold :: Op -> [AExp] -> AExp
 constFold o xs = case xs of
   [Int _ a, Int _ b] -> h a b
@@ -512,8 +529,15 @@ constFold o xs = case xs of
     Lt -> toB (<)
     Gte -> toB (>=)
     Lte -> toB (<=)
+    And -> iToI (.&.)
+    Or -> iToI (.|.)
+    Xor -> iToI xor
+    Shl -> shft shiftL -- BAL: correct?
+    Lshr -> shft shiftR -- BAL: correct?
+    Ashr -> shft shiftR -- BAL: correct?  Even need Ashr since we have Lshr?
     where
       iToI f x = Int t . f x
+      shft f x y = Int t $ f x (fromInteger y)
   toB :: (a -> a -> Bool) -> a -> a -> AExp
   toB f x y = Int t $ toInteger $ fromEnum (f x y)
   i :: Rational -> Rational -> AExp
@@ -567,6 +591,9 @@ canonCExp x = case x of
     Sub -> f SubR
     Quot -> f QuotR
     Rem -> f RemR
+    Shl -> f ShlR
+    Lshr -> f LshrR
+    Ashr -> f AshrR
     Gt -> f Lt
     Lt -> f Gt
     Gte -> f Lte
