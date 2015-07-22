@@ -278,12 +278,9 @@ lshr4 x v = lshr v (4*x)
 list0 :: E V16W4
 list0 = 0xfedcba987654321
 
-getix v i = lshr4 15 $ shl4 (nelems - 1 - i) v
-setix v i x = v0 `bor` v1 `bor` v2
-  where
-    v0 = shl4 (i + 1) $ lshr4 (i + 1) v
-    v1 = shl4 i x
-    v2 = lshr4 (nelems - i) $ shl4 (nelems - i) v
+getix v i = lshr4 i v `band` 0xf
+
+setix v i x = v `xor` ((v `xor` shl4 i x) `band` (shl4 i 0xf))
 
 updix v i f = setix v i $ f $ getix v i
 

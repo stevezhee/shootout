@@ -6,9 +6,9 @@ import Data.Word
 
 main :: IO ()
 main = compile $
-  fst $ nextPerm $ nextPerm perm0
+  -- fst $ nextPerm $ nextPerm perm0
   -- fst perm0
-  -- updix list0 (var 0) (+ 1)
+  updix list0 (var 0) (+ 3)
   -- setix list0 (var 0) 2
   -- getix list0 (var 0)
 --  rotate list0 (var 0)
