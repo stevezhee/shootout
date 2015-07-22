@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
+#include <inttypes.h>
 
 typedef struct
 {
@@ -85,7 +86,8 @@ int main(int argc, char ** argv)
       printf("need an argument between 1 and 15\n");
       return 0;
     }
-  print_v16w4(foo((uint64_t)n));
+  printf("%" PRId64 "\n",foo((uint64_t)n));
+  // print_v16w4(foo((uint64_t)n));
   return 0;
 #endif
 /* #else */

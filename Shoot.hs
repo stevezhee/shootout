@@ -24,6 +24,12 @@ var x = let v = E $ U.var (typeof v) x in v
 
 compile (E x) = U.compile x
 
+false :: E Bool
+false = E $ U.EAExp $ U.Int U.tbool 0
+
+true :: E Bool
+true = E $ U.EAExp $ U.Int U.tbool 1
+
 eq :: (EType a, Ord a) => E a -> E a -> E Bool
 eq = binop Eq
 band :: (EType a, Integral a) => E a -> E a -> E a
@@ -73,14 +79,14 @@ instance (Aggregate a) => Aggregate [a] where
 switch :: (EType a, Aggregate b) => E a -> [b] -> b -> b
 switch a bs c = agg $ U.switch (unE a) (map unAgg bs) (unAgg c)
 
-max x y = ife (x `gte` y) x y
+emax x y = eif (x `gte` y) x y
 
 while :: (Aggregate a) => a -> (a -> (E Bool, a)) -> a
 while x f = agg $ U.while (unAgg x) g
   where g = \bs -> let (a, b) = f (agg bs) in (unE a, unAgg b)
 
-ife :: (EType a) => E Bool -> E a -> E a -> E a
-ife x y z = switch x [z] y
+eif :: (EType a) => E Bool -> E a -> E a -> E a
+eif x y z = switch x [z] y
 
 instance (EType a, Num a) => Num (E a) where
   fromInteger x = let v = E $ U.EAExp $ U.Int (typeof v) x in v
@@ -111,7 +117,7 @@ mod' = binop Rem
 fastpow :: (EType a, EType b, Num a, Integral b, Ord b, Real b) => E a -> E b -> E a
 fastpow b e =
   snd $ while ((b, e), 1) $ \((b, e), r) ->
-    (e `gt` 0, ((b * b, e `div'` 2), ife ((e `mod'` 2) `ne` 0) (r * b) r))
+    (e `gt` 0, ((b * b, e `div'` 2), eif ((e `mod'` 2) `ne` 0) (r * b) r))
 
 dbl x = x + x
 
@@ -275,9 +281,6 @@ nelems = 16
 shl4 x v = shl v (4*x)
 lshr4 x v = lshr v (4*x)
 
-list0 :: E V16W4
-list0 = 0xfedcba987654321
-
 getix v i = lshr4 i v `band` 0xf
 
 setix v i x = maskMerge v (shl4 i x) (shl4 i 0xf)
@@ -289,15 +292,50 @@ updix v i f = setix v i $ f $ getix v i
 maxV16W4 :: E V16W4
 maxV16W4 = 0xffffffffffffffff
 
-rotate :: E V16W4 -> E V16W4 -> E V16W4
+rotate :: E V16W4 -> E Word64 -> E V16W4
 rotate v n = maskMerge (maskMerge v1 v2 (shl4 (n - 1) 0xf)) v mask
   where
     v1 = lshr4 1 v
     v2 = shl4 (n - 1) v
     mask = shl4 n maxV16W4
 
--- BAL: restructure for 0 based indexing
-nextPerm :: (E V16W4, (E V16W4, E Word64)) -> (E V16W4, (E V16W4, E Word64))
+tkFlip :: (EType a, Num a) => E V16W4 -> E a
+tkFlip v0 = snd $ while (v0, 0) $ \(v,n) ->
+  ( getix v 0 `gt` 1
+  , (tkReverse v, n + 1)
+  )
+
+tkReverse :: E V16W4 -> E V16W4
+tkReverse v0 = maskMerge (rev v r) v0 (shl4 n0 maxV16W4)
+  where
+    rev v r = r `bor` (v `band` 0xf)
+    n0 = getix v0 0
+    (_, (v,r)) = while (n0, (v0, 0)) $ \(n, (v, r)) ->
+      ( n `gt` 1
+      , (n - 1, (lshr4 1 v, shl4 1 $ rev v r))
+      )
+
+factorial :: (EType a, Integral a) => E a -> E a
+factorial n0 = snd $ while (n0,1) $ \(n,r) -> (n `gt` 1, (n - 1, r * n))
+
+tkMain :: (EType a, Integral a) => E a -> (E a, E a)
+tkMain n =
+  fst $ while ((0,0), (factorial n, perm0)) $ \((max_flips, checksum),(n,pci@(p,_))) ->
+    ( n `gt` 0
+    , let flips_count = tkFlip p in
+        ((emax max_flips flips_count, -1 * (checksum + flips_count)), (n - 1, nextPerm pci))
+    )
+
+factorialFoo :: (EType a, Integral a) => E a -> E a
+factorialFoo n0 = while n0 $ \n -> (false, n)
+
+tkFoo :: E Word64 -> E Word64
+tkFoo n0 =
+  while (factorialFoo n0) $ \n ->
+    ( false
+    , factorialFoo n
+    )
+
 nextPerm pci = (rotate p i, (updix c i (+ 1), 2))
   where
   (p, (c, i)) = while pci $ \(p,(c,i)) ->
@@ -306,4 +344,5 @@ nextPerm pci = (rotate p i, (updix c i (+ 1), 2))
     )
 
 perm0 :: (E V16W4, (E V16W4, E Word64))
-perm0 = (list0, (0x1111111111111111, 2))
+perm0 = (0xfedcba987654321, (0x1111111111111111, 2))
+
