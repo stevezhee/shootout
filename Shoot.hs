@@ -271,13 +271,6 @@ fannkuchredux bs0 = fst $ while (0, bs0) $ \(n, bs@(b:_)) ->
 
 type V16W4 = Word64
 
-rotate :: E V16W4 -> E V16W4 -> E V16W4
-rotate v n = v0 `bor` v1 `bor` v2
-  where
-    v0 = shl4 n $ lshr4 n v
-    v1 = lshr4 ((1 + nelems) - n) $ shl4 (nelems - n) v
-    v2 = lshr4 (nelems - n) $ shl4 (nelems - 1) v
-
 nelems = 16
 shl4 x v = shl v (4*x)
 lshr4 x v = lshr v (4*x)
@@ -294,13 +287,20 @@ setix v i x = v0 `bor` v1 `bor` v2
 
 updix v i f = setix v i $ f $ getix v i
 
+rotate :: E V16W4 -> E V16W4 -> E V16W4
+rotate v n = v0 `bor` v1 `bor` v2
+  where
+    v0 = shl4 n $ lshr4 n v
+    v1 = lshr4 ((1 + nelems) - n) $ shl4 (nelems - n) v
+    v2 = lshr4 (nelems - n) $ shl4 (nelems - 1) v
+
 -- BAL: restructure for 0 based indexing
 nextPerm :: (E V16W4, (E V16W4, E Word64)) -> (E V16W4, (E V16W4, E Word64))
-nextPerm pci = (rotate p i, (updix c (i - 1) (+ 1), 2))
+nextPerm pci = (rotate p i, (updix c i (+ 1), 2))
   where
   (p, (c, i)) = while pci $ \(p,(c,i)) ->
-    ( getix c (i - 1) `gte` i
-    , (rotate p i, (setix c (i - 1) 1, i + 1))
+    ( getix c i `gte` i
+    , (rotate p i, (setix c i 1, i + 1))
     )
 
 perm0 :: (E V16W4, (E V16W4, E Word64))
