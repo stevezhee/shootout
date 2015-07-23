@@ -79,5 +79,5 @@ int foo(int n)
    for (i = 0; i < max_n; i++) s[i] = i;
    tk(max_n);
    return checksum;
-   return maxflips;
+   //   return maxflips;
 }
