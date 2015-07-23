@@ -113,6 +113,7 @@ instance Typed AExp where
     FVar a -> typeof a
     BVar a -> typeof a
     UVar a -> typeof a
+    Undef a -> a
     
 llvmTypeof :: Typed a => a -> A.Type
 llvmTypeof = llvmType . typeof
@@ -121,10 +122,12 @@ llvmType x = case x of
   TSInt a -> tint a
   TUInt a -> tint a
   TDouble -> A.FloatingPointType 64 A.IEEE
+  TVector a b -> A.VectorType (fromInteger a) $ llvmType b
   where
     tint = A.IntegerType . fromIntegral
   
-data Type = TSInt Integer | TUInt Integer | TDouble | TAggregate deriving (Show, Eq, Ord, Generic)
+data Type = TSInt Integer | TUInt Integer | TDouble | TAggregate | TVector Integer Type
+  deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
 
 llvmOp :: Type -> Op -> ([Operand] -> A.Instruction)
@@ -153,6 +156,8 @@ llvmOp t x = case x of
   ShlR -> rev Shl
   LshrR -> rev Lshr
   AshrR -> rev Ashr
+  ExtractElement -> \[a,b] -> A.ExtractElement a b []
+  InsertElement -> \[a,b,c] -> A.InsertElement a b c []
   _ -> error $ "llvmOp:" ++ show x
   where
     intop f = binary f $ unused "llvmOp:intop"
@@ -190,8 +195,10 @@ llvmOperand x = case x of
   FVar a -> ref a
   BVar a -> ref a
   UVar a -> ref a
+  Undef a -> ConstantOperand $ C.Undef t
   where
-    ref a = LocalReference (llvmTypeof x) (llvmName a)
+    ref a = LocalReference t (llvmName a)
+    t = llvmTypeof x
 
 llvmTerminator x = Do $ case x of
   Jump a -> A.Br (llvmName a) []
@@ -245,6 +252,9 @@ data Op
   | Abs | Signum
   | Sqrt | Exp | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh
   | Acosh
+  | InsertElement
+  | ExtractElement
+  | ShuffleVector
   deriving (Show, Eq, Ord, Generic, Enum)
 instance Hashable Op
 instance PP Op where pp = text . show
@@ -254,9 +264,10 @@ instance PP Rational where pp = rational
 
 type NumBV = Integer
 
-data AExp -- don't reorder
+data AExp -- don't reorder -- BAL: Could also break out constants and allow constant vectors to be constant.  codegen for constant arrays would be (much) more compact
   = Int Type Integer
   | Rat Type Rational
+  | Undef Type
   | UVar User
   | BVar Bound
   | FVar Free
@@ -697,6 +708,7 @@ instance PP AExp where
     UVar a -> pp a
     Int _ a -> pp a
     Rat _ a -> pp a
+    Undef _ -> text "undef"
     
 instance (PP a, PP b, PP c, PP d) => PP (a,b,c,d) where
   pp (a,b,c,d) = parens (vcat [pp a, pp b, pp c, pp d])
@@ -714,6 +726,9 @@ maxBV x = case x of
 
 binop :: Op -> Exp -> Exp -> Exp
 binop o x y = EOp (maximumBV [x,y]) o [x,y]
+
+ternop :: Op -> Exp -> Exp -> Exp -> Exp
+ternop o x y z = EOp (maximumBV [x,y,z]) o [x,y,z]
 
 unop :: Op -> Exp -> Exp
 unop o x = EOp (maxBV x) o [x]

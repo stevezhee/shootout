@@ -1,15 +1,23 @@
+{-# LANGUAGE EmptyDataDecls #-}
 module Main where
 
 import Prelude hiding (max)
 import Shoot
 import Data.Word
 
+data C16
+instance Count C16 where countof _ = 16
+data C1
+instance Count C1 where countof _ = 1
+
 main :: IO ()
 main = compile $
-  ((snd $ tkMain (var 0)) :: E Int)
-  -- tkFoo (var 0)
+  (ex (var 0) (vec [0 .. ] :: E (V C1 Int)))
+  -- (ex (var 0) (vec [0 .. ] :: E (V C16 Int)))
+  -- evalA 1 (var 0)
+  -- ((snd $ fkMain (var 0)) :: E Int)
   -- factorial (var 0 :: E Word64)
-  -- tkFlip $ fst $ nextPerm $ nextPerm perm0
+  -- fkFlip $ fst $ nextPerm $ nextPerm perm0
   -- fst $ nextPerm $ nextPerm perm0
   -- fst perm0
   --updix list0 (var 0) (+ 3)

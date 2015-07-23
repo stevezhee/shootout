@@ -1,11 +1,11 @@
 CC = clang -O3 -lm
 
-all : a.exe nbody.exe fannkuch.exe
+all : a.exe nbody.exe fannkuch.exe spectral.exe
 	ls -al $^
-	# ./a.exe 0
-	# ./nbody.exe 0
-	./a.exe 7
-	./fannkuch.exe 7
+	./a.exe 2
+	# ./a.exe 2000
+	./spectral.exe 2000
+	# ./fannkuch.exe 7
 	# ./nbody.exe 1
 
 t.ll : Main.hs Shoot.hs Untyped.hs

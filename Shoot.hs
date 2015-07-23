@@ -1,4 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE EmptyDataDecls #-}
 module Shoot where
 
 import qualified Untyped as U
@@ -15,9 +17,39 @@ instance EType Int where etypeof _ = TSInt 32
 instance EType Double where etypeof _ = TDouble
 instance EType Bool where etypeof _ = TUInt 1
 
-class EType a where  etypeof :: E a -> Type
+class EType a where etypeof :: a -> Type
 
-instance EType a => Typed (E a) where typeof = etypeof
+instance EType a => Typed (E a) where typeof (_ :: E a) = etypeof (unused "etypeof:E a" :: a)
+
+class Count c where countof :: c -> Integer
+
+instance (Count c, EType a) => EType (V c a) where
+  etypeof (_ :: V c a) = TVector (countof (unused "countof:V c a" :: c)) (etypeof (unused "typeof:V c a" :: a))
+
+data V c a
+
+assert s b a = if b then a else error $ "assert:" ++ s
+
+undef :: (EType a) => E a
+undef = f (unused "undef")
+  where
+    f :: (EType a) => a -> E a
+    f = E . U.EAExp . U.Undef . etypeof
+
+vec :: (Count c, EType a) => [E a] -> E (V c a)
+vec (xs :: [E a]) = f (unused "vec")
+  where
+    f :: (Count c, EType a) => c -> E (V c a)
+    f c = assert "vec:length mismatch" (not (null bs) && length bs == cnt) $ foldl' ins undef $ zip bs [0 .. ]
+      where
+      cnt = fromIntegral $ countof c
+      bs = take cnt xs
+
+ex :: (Count c, EType a) => E Word -> E (V c a) -> E a
+ex = flip (binop U.ExtractElement)
+
+ins :: (Count c, EType a) => E (V c a) -> (E a, E Word) -> E (V c a)
+ins x (y, z) = ternop U.InsertElement x y z
 
 var :: EType a => Integer -> E a
 var x = let v = E $ U.var (typeof v) x in v
@@ -121,6 +153,9 @@ fastpow b e =
 
 dbl x = x + x
 
+ternop :: Op -> E a -> E b -> E c -> E d
+ternop o (E x) (E y) (E z) = E $ U.ternop o x y z
+
 binop :: Op -> E a -> E b -> E c
 binop o (E x) (E y) = E $ U.binop o x y
   
@@ -146,6 +181,8 @@ instance (EType a, Floating a) => Floating (E a) where
   asinh = unop Asinh
   atanh = unop Atanh
   acosh = unop Acosh
+
+-- N-Body
 
 days_per_year = 365.24
 solar_mass = 4 * pi^2
@@ -265,16 +302,6 @@ nbody n = energy $ snd $
     )
 
 --------------------------
-fannkuchredux :: (EType a, Ord a, Num a, Num b, EType b) => [E a] -> E b
-fannkuchredux bs0 = fst $ while (0, bs0) $ \(n, bs@(b:_)) ->
-  ( b `ne` 1
-  , ( n + 1
-    , switch (b - 2)
-        [ reverse (take x bs) ++ drop x bs | x <- [2 .. 4] ]
-        (reverse bs)
-    )
-  )
-
 type V16W4 = Word64
 
 type Perm = (E V16W4, (E V16W4, E Word64))
@@ -283,58 +310,65 @@ nelems = 16
 shl4 x v = shl v (4*x)
 lshr4 x v = lshr v (4*x)
 
-getix v i = lshr4 i v `band` 0xf
+maskMerge x y mask = x `xor` ((x `xor` y) `band` mask) -- from graphics.stanford.edu bithacks.html
+
+ix v i = lshr4 i v `band` 0xf
 
 setix v i x = maskMerge v (shl4 i x) (shl4 i 0xf)
 
-maskMerge x y mask = x `xor` ((x `xor` y) `band` mask) -- from graphics.stanford.edu bithacks.html
-
-updix v i f = setix v i $ f $ getix v i
+updix v i f = setix v i $ f $ ix v i
 
 maxV16W4 :: E V16W4
 maxV16W4 = 0xffffffffffffffff
 
-tkRotate :: E V16W4 -> E Word64 -> E V16W4
-tkRotate v n = maskMerge (maskMerge v1 v2 (shl4 (n - 1) 0xf)) v mask
+factorial :: (EType a, Integral a) => E a -> E a
+factorial n0 = snd $ while (n0,1) $ \(n,r) -> (n `gt` 1, (n - 1, r * n))
+
+fkRotate :: E V16W4 -> E Word64 -> E V16W4
+fkRotate v n = maskMerge (maskMerge v1 v2 (shl4 (n - 1) 0xf)) v mask
   where
     v1 = lshr4 1 v
     v2 = shl4 (n - 1) v
     mask = shl4 n maxV16W4
 
-tkFlip :: (EType a, Num a) => E V16W4 -> E a
-tkFlip v0 = snd $ while (v0, 0) $ \(v,n) ->
-  ( getix v 0 `gt` 1
-  , (tkReverse v, n + 1)
+fkFlip :: (EType a, Num a) => E V16W4 -> E a
+fkFlip v0 = snd $ while (v0, 0) $ \(v,n) ->
+  ( ix v 0 `gt` 1
+  , (fkReverse v, n + 1)
   )
 
-tkReverse :: E V16W4 -> E V16W4
-tkReverse v0 = maskMerge (rev v r) v0 (shl4 n0 maxV16W4)
+fkReverse :: E V16W4 -> E V16W4
+fkReverse v0 = maskMerge (rev v r) v0 (shl4 n0 maxV16W4)
   where
+    n0 = v0 `ix` 0
     rev v r = r `bor` (v `band` 0xf)
-    n0 = getix v0 0
     (_, (v,r)) = while (n0, (v0, 0)) $ \(n, (v, r)) ->
       ( n `gt` 1
       , (n - 1, (lshr4 1 v, shl4 1 $ rev v r))
       )
 
-tkPerm :: Perm -> Perm
-tkPerm pci = (tkRotate p i, (updix c i (+ 1), 2))
+fkPerm :: Perm -> Perm
+fkPerm pci = (fkRotate p i, (updix c i (+ 1), 2))
   where
   (p, (c, i)) = while pci $ \(p,(c,i)) ->
-    ( getix c i `gte` i
-    , (tkRotate p i, (setix c i 1, i + 1))
+    ( ix c i `gte` i
+    , (fkRotate p i, (setix c i 1, i + 1))
     )
 
-perm0 :: Perm
-perm0 = (0xfedcba987654321, (0x1111111111111111, 2))
-
-factorial :: (EType a, Integral a) => E a -> E a
-factorial n0 = snd $ while (n0,1) $ \(n,r) -> (n `gt` 1, (n - 1, r * n))
-
-tkMain :: (EType a, Integral a) => E a -> (E a, E a)
-tkMain n =
+fkMain :: (EType a, Integral a) => E a -> (E a, E a)
+fkMain n =
   fst $ while ((0,0), (factorial n, perm0)) $ \((max_flips, checksum),(n,pci@(p,_))) ->
     ( n `gt` 0
-    , let flips_count = tkFlip p in
-        ((emax max_flips flips_count, -1 * (checksum + flips_count)), (n - 1, tkPerm pci))
+    , let flips_count = fkFlip p in
+        ((emax max_flips flips_count, -1 * (checksum + flips_count)), (n - 1, fkPerm pci))
     )
+  where
+    perm0 = (0xfedcba987654321, (0x1111111111111111, 2))
+
+-- spectral-norm
+evalA :: E Double -> E Double -> E Double
+evalA i j = 1.0/((i+j)*(i+j+1)/2+i+1)
+
+-- evalATimesU :: (Size sz) => V sz Double -> V sz Double
+evalATimesU u au = undefined
+  

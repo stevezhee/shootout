@@ -4,27 +4,11 @@
 #include <math.h>
 #include <inttypes.h>
 
-typedef struct
-{
-  double x;
-  double y;
-  double z;
-  double vx;
-  double vy;
-  double vz;
-  double mass;
-} body_t;
-
 void print_v16w4(uint64_t x)
 {
   uint64_t d;
 
   printf("[");
-  /* while((d = x & 0xf) != 0) */
-  /*   { */
-  /*     printf("%lu;",d); */
-  /*     x >>= 4; */
-  /*   } */
   while(x != 0)
     {
       d = x & 0xf;
@@ -33,53 +17,43 @@ void print_v16w4(uint64_t x)
     }
   printf("]\n");
 }
-  // #define FASTPOW
+
 //#define NBODY
 #define FANNKUCHREDUX
-/* #if defined(FASTPOW) */
-/* int foo(int, unsigned int); */
-/* #elseif defined(NBODY) */
+//#define SPECTRAL
+
 #if defined(NBODY)
 double foo(int);
 #endif
 #if defined(FANNKUCHREDUX)
-int foo(int);
-// foo(void);
+// BAL: int foo(int);
+int foo(unsigned int); //BAL: just prototyping
 #endif
-/* #else */
-/* double foo(double); */
-/* #endif */
+#if defined(SPECTRAL)
+double foo(int);
+#endif
+
+void arg_check(int argc, int n)
+{
+  if(argc - 1 < n)
+    {
+      printf("need %d argument(s)\n", n);
+      exit(-1);
+    }
+}
 
 int main(int argc, char ** argv)
 {
-/* #ifdef FASTPOW */
-/*   if(argc < 2) */
-/*     { */
-/*       printf("need 2 arguments\n"); */
-/*       return 0; */
-/*     } */
-/*   int n = atoi(argv[1]); */
-/*   unsigned int m = atoi(argv[2]); */
-/*   printf("%d\n", foo(n, m)); */
-/*   return 0; */
-
 #if defined(NBODY)
-  if(argc < 1)
-    {
-      printf("need an argument\n");
-      return 0;
-    }
+  printf("N-Body:");
+  arg_check(argc, 1);
   int n = atoi(argv[1]);
   double m = foo(n);
   printf ("%.9f\n", m);
-  return 0;
 #endif
 #if defined(FANNKUCHREDUX)
-  if(argc < 1)
-    {
-      printf("need an argument\n");
-      return 0;
-    }
+  printf("Pfannkuchen:");
+  arg_check(argc, 1);
   int n = atoi(argv[1]);
   if((n < 3) || (n > 15))
     {
@@ -87,24 +61,13 @@ int main(int argc, char ** argv)
       return 0;
     }
 
-  printf("Pfannkuchen(%d) = %d\n", n, foo(n));
-
-  // printf("%" PRId64 "\n",foo((uint64_t)n));
-  // print_v16w4(foo((uint64_t)n));
-  return 0;
+  printf("(%d) = %d\n", n, foo(n));
 #endif
-/* #else */
-/*   if(argc < 1) */
-/*     { */
-/*       printf("need an argument\n"); */
-/*       return 0; */
-/*     } */
-/*   double n = atof(argv[1]); */
-/*   double m = foo(n); */
-/*   printf("%f\n", m); */
-/*   return 0; */
-
-/*   // #include "gen.c" */
-/*   //  return 0; */
-/* #endif */
+#if defined(SPECTRAL)
+  printf("spectral:");
+  arg_check(argc, 1);
+  int n = atoi(argv[1]);
+  printf("%0.9f\n",foo(n));
+#endif
+  return 0;
 }
