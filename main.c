@@ -43,7 +43,7 @@ void print_v16w4(uint64_t x)
 double foo(int);
 #endif
 #if defined(FANNKUCHREDUX)
-uint64_t foo(uint64_t);
+int foo(int);
 // foo(void);
 #endif
 /* #else */
@@ -80,13 +80,16 @@ int main(int argc, char ** argv)
       printf("need an argument\n");
       return 0;
     }
-  uint n = atoi(argv[1]);
-  if((n < 1) || (n > 15))
+  int n = atoi(argv[1]);
+  if((n < 3) || (n > 15))
     {
       printf("need an argument between 1 and 15\n");
       return 0;
     }
-  printf("%" PRId64 "\n",foo((uint64_t)n));
+
+  printf("Pfannkuchen(%d) = %d\n", n, foo(n));
+
+  // printf("%" PRId64 "\n",foo((uint64_t)n));
   // print_v16w4(foo((uint64_t)n));
   return 0;
 #endif

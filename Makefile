@@ -1,11 +1,12 @@
 CC = clang -O3 -lm
 
-all : a.exe nbody.exe
+all : a.exe nbody.exe fannkuch.exe
 	ls -al $^
 	# ./a.exe 0
 	# ./nbody.exe 0
 	./a.exe 7
-	./nbody.exe 1
+	./fannkuch.exe 7
+	# ./nbody.exe 1
 
 t.ll : Main.hs Shoot.hs Untyped.hs
 	stack install
@@ -26,9 +27,8 @@ a.exe : t.s main.c
 # %.out : %.exe
 # 	./$< 100 > $@
 
-nbody.exe : nbody.c main.c
+%.exe : %.c main.c
 	${CC} -o $@ $^
-# 	${GCC}
 
 # gen.c : NBody.hs
 # 	runghc -Wall $< > $@
