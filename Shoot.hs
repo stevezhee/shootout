@@ -326,16 +326,20 @@ tkMain n =
         ((emax max_flips flips_count, -1 * (checksum + flips_count)), (n - 1, nextPerm pci))
     )
 
-factorialFoo :: (EType a, Integral a) => E a -> E a
-factorialFoo n0 = while n0 $ \n -> (false, n)
 
 tkFoo :: E Word64 -> E Word64
-tkFoo n0 =
-  while (factorialFoo n0) $ \n ->
+tkFoo n =
+  snd $ while (42 :: E Word, 24) $ \ci ->
     ( false
-    , factorialFoo n
+    , while ci $ \(c,i) ->
+        ( false
+        , (c, i + 1)
+        )
     )
 
+type Perm = (E V16W4, (E V16W4, E Word64))
+
+nextPerm :: Perm -> Perm
 nextPerm pci = (rotate p i, (updix c i (+ 1), 2))
   where
   (p, (c, i)) = while pci $ \(p,(c,i)) ->
@@ -343,6 +347,6 @@ nextPerm pci = (rotate p i, (updix c i (+ 1), 2))
     , (rotate p i, (setix c i 1, i + 1))
     )
 
-perm0 :: (E V16W4, (E V16W4, E Word64))
+perm0 :: Perm
 perm0 = (0xfedcba987654321, (0x1111111111111111, 2))
 

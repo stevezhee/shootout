@@ -103,7 +103,7 @@ llvmInsn (x, (y, zs)) = llvmName x := (llvmOp (typeof $ head zs) y) (map llvmOpe
 
 class Typed a where typeof :: a -> Type
 
-instance Typed Bound where typeof (Bound a _) = a
+instance Typed Bound where typeof (Bound a _ _) = a
 instance Typed User where typeof (User a _) = a
 instance Typed Free where typeof (Free a _) = a
 instance Typed AExp where
@@ -224,11 +224,12 @@ data User = User Type Integer deriving (Show, Eq, Ord, Generic)
 instance Hashable User
 instance PP User where pp (User _ a) = text "U" <> integer a
 
-data Bound = Bound{ btype :: Type, bid :: Integer } deriving (Show, Eq, Ord, Generic)
+data Bound = Bound{ btype :: Type, blabel :: Maybe Label, bid :: Integer } deriving (Show, Eq, Ord, Generic)
 instance Hashable Bound
-instance PP Bound where pp (Bound _ a) = text "B" <> integer a
+instance PP Bound where
+  pp (Bound _ m a) = text "B" <> d <> text "." <> integer a where d = maybe (text "?") (pp . lid) m
   
-newtype Label = Label{ unLabel :: Integer } deriving (Show, Eq, Num, Ord, Generic, Enum)
+newtype Label = Label{ lid :: Integer } deriving (Show, Eq, Num, Ord, Generic, Enum)
 instance Hashable Label
 instance PP Label where pp (Label a) = text "L" <> integer a
 
@@ -325,8 +326,11 @@ v = phi $ zip (b:bs) (lbl b : map lbl bs)
 
 -}
 
-lookupFVar :: Free -> N CExp
-lookupFVar x = flip (!) (fid x) <$> gets fvars
+lookupFree :: Free -> N (Maybe CExp)
+lookupFree x = flip (!) (fid x) <$> gets fvars
+
+lookupBound :: Bound -> N (Maybe Label)
+lookupBound x = flip (!) (bid x) <$> gets bvars
 
 pushInsn :: (Free, (Op, [AExp])) -> N ()
 pushInsn x =
@@ -338,7 +342,9 @@ pushTerm x = modify $ \st ->
 
 pushLabel :: Label -> [(Bound, [(AExp, Label)])] -> N ()
 pushLabel lbl ps =
-  modify $ \st -> st{ blocks = Block lbl ps [] (unused "pushLabel") : blocks st }
+  modify $ \st -> st{ blocks = Block lbl (map f ps) [] (unused "pushLabel") : blocks st }
+  where
+    f (a,b) = (nameBound a $ Just lbl, b)
 
 freshLabel :: N Label
 freshLabel = do
@@ -355,73 +361,97 @@ freshLabel = do
 currentLabel :: N Label
 currentLabel = label . head <$> gets blocks
 
+sortByFst :: (Ord a) => [(a,b)] -> [(a,b)]
+sortByFst = sortBy (\a b -> compare (fst a) (fst b))
+
 groupByFst :: (Eq a, Ord a) => [(a,b)] -> [(a, [b])]
-groupByFst = map (\bs -> (fst $ head bs, map snd bs)) . groupBy (\a b -> fst a == fst b) . sortBy (\a b -> compare (fst a) (fst b))
+groupByFst = map (\bs -> (fst $ head bs, map snd bs)) . groupBy (\a b -> fst a == fst b) . sortByFst
 
 computes = mapM compute
   
 compute :: AExp -> N AExp
 compute x = case x of
+  UVar a -> do
+    modify $ \st -> st{ uvars = S.insert a $ uvars st }
+    return x
   FVar n -> do
     let ok vx = do
-          modify $ \st -> st{ fvars = fvars st // [(fid n, CAExp vx)] }
+          pushFree n $ Just $ CAExp vx
           return vx
-    y <- lookupFVar n
+    Just y <- lookupFree n
     case y of
       CAExp a -> return a
       COp a bs -> do
         vbs <- computes bs
         pushInsn (n, (a,vbs))
         ok x
-      CSwitch vs a bss cs -> do
-        va <- compute a
-        lbl : lbls <- mapM (const freshLabel) (cs : bss)
-        let ps = zip (cs : bss) (lbl : lbls)
-        end <- freshLabel
-        pushTerm $ Switch va lbls lbl
-        vpss <- flip mapM ps $ \(bs,l) -> do
-          pushLabel l []
-          vbs <- computes bs -- BAL: need a 'withMap' function
-          l' <- currentLabel
-          pushTerm $ Jump end
-          return $ zip vs $ zip vbs $ repeat l'
-        pushLabel end $ groupByFst $ concat vpss
-        ok $ Int (TSInt 42) $ unLabel end -- the value here doesn't matter, just prevents recomputation
-      CWhile a bs -> do
-        [begin, test, body, end] <- sequence $ replicate 4 freshLabel
-        vbs0 <- computes $ map (head . snd) bs
-        pre <- currentLabel
-        pushTerm $ Jump begin
-
-        pushLabel test []
-        va <- compute a
-        pushTerm $ Switch va [end] body
-        
-        pushLabel body []
-        vbs1 <- computes $ map (last . snd) bs
-        from <- currentLabel
-        pushTerm $ Jump begin
-        
-        pushLabel begin
-          [ (fooBound r (unLabel end), [(p, pre), (q, from)])
-                        | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1
-                        ]
-        pushTerm $ Jump test
-
-        pushLabel end []
-        ok $ Int (TSInt 42) $ unLabel end -- the value here doesn't matter, just prevents recomputation
-
       CPhi a b -> do
-        foo <- compute b
-        let Int _ i = foo
-        trace ("[!" ++ show (foo,a) ++ "!]") $ ok $ BVar $ fooBound a i
-      
-  UVar a -> do
-    modify $ \st -> st{ uvars = S.insert a $ uvars st }
-    return x
+        computeStmt b
+        compute $ BVar a
+      _ -> unused "compute:FVar"
+  BVar a -> (BVar . nameBound a) <$> lookupBound a
   _ -> return x
 
-fooBound x i = x{bid = i*100 + bid x }
+nameBound :: Bound -> Maybe Label -> Bound
+nameBound x mlbl = x{ blabel = mlbl }
+
+pushFree n mx = modify $ \st -> st{ fvars = fvars st // [(fid n, mx)] }
+pushBounds lbl xs = modify $ \st -> st{ bvars = bvars st // [(bid r, Just lbl) | r <- xs ] }
+
+computeStmt :: AExp -> N ()
+computeStmt x = case x of
+  FVar n -> do
+    my <- lookupFree n
+    case my of
+      Nothing -> return ()
+      Just y -> do
+        pushFree n Nothing
+        case y of
+          CSwitch vs a bss cs -> do
+            va <- compute a
+            lbl : lbls <- mapM (const freshLabel) (cs : bss)
+            let ps = zip (cs : bss) (lbl : lbls)
+            pushTerm $ Switch va lbls lbl
+    
+            end <- freshLabel
+            vpss <- flip mapM ps $ \(bs,l) -> do
+              pushLabel l []
+              vbs <- computes bs -- BAL: need a 'withMap' function
+              l' <- currentLabel
+              pushTerm $ Jump end
+              return $ zip vs $ zip vbs $ repeat l'
+    
+            pushBounds end vs
+            pushLabel end $ groupByFst $ concat vpss
+    
+          CWhile a bs -> do
+            vbs0 <- computes $ map (head . snd) bs
+            pre <- currentLabel
+            begin <- freshLabel
+            pushTerm $ Jump begin
+    
+            pushBounds begin $ map fst bs
+            test <- freshLabel
+    
+            pushLabel test []
+            va <- compute a
+            end <- freshLabel
+            body <- freshLabel        
+            pushTerm $ Switch va [end] body
+    
+            pushLabel body []
+            vbs1 <- computes $ map (last . snd) bs
+            from <- currentLabel
+            pushTerm $ Jump begin
+            
+            pushLabel begin
+              [ (r, [(p, pre), (q, from)]) | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1 ]
+            pushTerm $ Jump test
+
+            pushLabel end []
+
+  _ -> unused "computeStmt"
+
 {-
 -- v = while a bs c
 -- 'a' and 'c' must both depend on bs o.w. error
@@ -700,9 +730,10 @@ switch x ys z = fmap (flip EPhi $ ESwitch (n + m) vs x ys z) vs
     n = maximumBV (x : toList z ++ concatMap toList ys)
     
 while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
-while xs f = fmap (\(v, _) -> EPhi v $ EWhile (n + m) e t) t
+while xs f = fmap (\(v, _) -> EPhi v w) t
   -- ^ BAL: identify unused loop variables (remove(warning?) or error)
   where
+    w = EWhile (n + m) e t
     t = zipTree vs $ fmap (\(a,b) -> [a,b]) $ zipTree xs ys
     m = genericLength $ toList xs
     (e, ys) = f $ fmap (EAExp . BVar) vs
@@ -710,7 +741,7 @@ while xs f = fmap (\(v, _) -> EPhi v $ EWhile (n + m) e t) t
     n = maximumBV (e : toList xs ++ toList ys)
 
 bound :: Typed a => Integer -> Tree a -> Tree Bound
-bound n = snd . mapAccumR (\(w:ws) x -> (ws, Bound (typeof x) $ n + w)) [0..]
+bound n = snd . mapAccumR (\(w:ws) x -> (ws, Bound (typeof x) Nothing $ n + w)) [0..]
 
 zipTree :: Tree a -> Tree b -> Tree (a,b)
 zipTree (Node xs) (Node ys) = Node $ map (uncurry zipTree) $ zip xs ys
@@ -726,7 +757,8 @@ data St = St
   { blocks :: [Block]
   , nextLabel :: Label
   , uvars :: Set User
-  , fvars :: Array Integer CExp
+  , fvars :: Array Integer (Maybe CExp)
+  , bvars :: Array Integer (Maybe Label)
   } deriving Show
 
 data Terminator
@@ -756,11 +788,11 @@ runCExpMap = flip runState (MapR M.empty 0) . aexp
 
 compile :: Exp -> IO ()
 compile x = do
---  print $ pp x
+  -- print $ pp x -- this gets big very quickly due to redundancy
   let a = runCExpMap x
---  print $ pp a
+  -- print $ pp a
 --  print a
-  let (us, bs) = runBlocks a
+  let (us, bs) = runBlocks (maxBV x) a
   print $ pp bs
   llvmAsm [(llvmTypeof $ fst a, "foo", us, map llvmBlock bs)]
 
@@ -771,26 +803,14 @@ llvmAsm xs = do
   
 sortByCompare f = sortBy $ \a b -> compare (f a) (f b)
 
-runBlocks :: (AExp, MapR Integer CExp) -> ([User], [Block])
-runBlocks (x, y) = (sort $ S.toList $ uvars st, sortByCompare label $ blocks st)
+runBlocks :: Integer -> (AExp, MapR Integer CExp) -> ([User], [Block])
+runBlocks nbv (x, y) = (sort $ S.toList $ uvars st, sortByCompare label $ blocks st)
   where
     st = execState (compute x >>= pushTerm . Return) St
       { blocks = [Block 0 [] [] $ unused "runBlocks"]
       , nextLabel = 1
       , uvars = S.empty
-      , fvars = array (0, pred $ next y) $ map swap $ M.toList $ hmapR y
+      , fvars = array (0, pred $ next y) $ map (\(a,b) -> (b, Just a)) $ M.toList $ hmapR y
+      , bvars = array (0, pred nbv) $ zip [0 .. pred nbv] $ repeat Nothing
       }
 
--- asdf =
---   (FVar (Free {ftype = TUInt 64, fid = 5})
---   ,MapR {hmapR = fromList
---     [(CWhile (Int (TUInt 1) 0) [(Bound (TUInt 64) 0,[UVar (User (TUInt 64) 0)
---                                                     ,BVar (Bound (TUInt 64) 0)])],0)
---     ,(CPhi (Bound (TUInt 64) 0) (FVar (Free {ftype = TAggregate, fid = 0})),1)
---     ,(CWhile (Int (TUInt 1) 0) [(Bound (TUInt 64) 0,[BVar (Bound (TUInt 64) 1)
---                                                     ,BVar (Bound (TUInt 64) 0)])],2)
---     ,(CPhi (Bound (TUInt 64) 0) (FVar (Free {ftype = TAggregate, fid = 2})),3)
---     ,(CWhile (Int (TUInt 1) 0) [(Bound (TUInt 64) 1,[FVar (Free {ftype = TUInt 64, fid = 1})
---                                                     ,FVar (Free {ftype = TUInt 64, fid = 3})])],4)
---     ,(CPhi (Bound (TUInt 64) 1) (FVar (Free {ftype = TAggregate, fid = 4})),5)
---     ], next = 6})

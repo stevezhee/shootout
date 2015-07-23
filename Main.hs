@@ -6,7 +6,8 @@ import Data.Word
 
 main :: IO ()
 main = compile $
-  tkFoo (var 0)
+  ((snd $ tkMain (var 0)) :: E Word64)
+  -- tkFoo (var 0)
   -- factorial (var 0 :: E Word64)
   -- tkFlip $ fst $ nextPerm $ nextPerm perm0
   -- fst $ nextPerm $ nextPerm perm0
