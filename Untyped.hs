@@ -156,6 +156,8 @@ llvmOp t x = case x of
   Sqrt -> uunary (unused "Sqrt:unsigned") (unused "Sqrt:signed") (call1 llvmSqrt)
   ExtractElement -> \[a,b] -> A.ExtractElement a b []
   InsertElement -> \[a,b,c] -> A.InsertElement a b c []
+  ToFP a -> uunary (flip A.UIToFP t') (flip A.SIToFP t') (unused "ToFP:double")
+    where t' = llvmType a
   _ -> error $ "llvmOp:" ++ show x
   where
     intop f = binary f $ unused "llvmOp:intop"
@@ -256,7 +258,8 @@ data Op
   | InsertElement
   | ExtractElement
   | ShuffleVector
-  deriving (Show, Eq, Ord, Generic, Enum)
+  | ToFP Type
+  deriving (Show, Eq, Ord, Generic)
 instance Hashable Op
 instance PP Op where pp = text . show
 
@@ -558,6 +561,7 @@ constFold o xs = case xs of
   f = case o of
     Abs -> Int t . abs
     Signum -> Int t . signum
+    ToFP a -> Rat a . toRational
     _ -> g . fromInteger
 
   g :: Rational -> AExp

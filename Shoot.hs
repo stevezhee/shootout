@@ -37,6 +37,9 @@ data V c a
 
 assert s b a = if b then a else error $ "assert:" ++ s
 
+tofp :: (EType a, Integral a, Floating b) => E a -> E b
+tofp x = unop (U.ToFP $ typeof x) x
+
 undef :: (EType a) => E a
 undef = f (unused "undef")
   where
@@ -60,18 +63,40 @@ ins :: (Count c, EType a) => E (V c a) -> (E a, E Word) -> E (V c a)
 ins x (y, z) = ternop U.InsertElement x y z
 
 vupd :: (Count c, EType a) => E (V c a) -> (E a -> E a, E Word) -> E (V c a)
-vupd x (f, z) = ins x (f $ ex x z, z)
+vupd x (f, z) = vupdi x (\_ -> f, z)
+
+vupdi :: (Count c, EType a) => E (V c a) ->
+  (E Word -> E a -> E a, E Word) -> E (V c a)
+vupdi x (f, z) = ins x (f z $ ex x z, z)
 
 vmap :: (Count c, EType a) => (E a -> E a) -> E (V c a) -> E (V c a)
-vmap f xs = snd $ while (0, xs) $ \(i, xs) ->
+vmap f = vmapi $ \_ -> f
+
+vmapi :: (Count c, EType a) => (E Word -> E a -> E a) -> E (V c a) -> E (V c a)
+vmapi f xs = snd $ while (0, xs) $ \(i, xs) ->
   ( i `lt` countof xs
-  , (i + 1, vupd xs (f, i))
+  , (i + 1, vupdi xs (f, i))
   )
 
 vfold :: (Count c, EType a, Aggregate b) => (b -> E a -> b) -> b -> E (V c a) -> b
-vfold f x ys = snd $ while (0, x) $ \(i, x) ->
+vfold f = vfoldi $ \_ -> f
+
+vunfoldi_ :: (Count c, EType a) => (E Word -> E a) -> E (V c a)
+vunfoldi_ f = vunfoldi (\i _ -> (f i, b)) b
+  where b :: E Word = unused "vunfoldi_"
+
+vunfoldi :: (Count c, Aggregate b, EType a) =>
+  (E Word -> b -> (E a, b)) -> b -> E (V c a)
+vunfoldi f b = snd $ while ((0, b), undef) $ \((i, b), v) ->
+  ( i `lt` countof v
+  , let (a,b') = f i b in ((i + 1, b'), ins v (a, i))
+  )
+
+vfoldi :: (Count c, EType a, Aggregate b) =>
+  (E Word -> b -> E a -> b) -> b -> E (V c a) -> b
+vfoldi f x ys = snd $ while (0, x) $ \(i, x) ->
   ( i `lt` countof ys
-  , (i + 1, f x $ ex ys i)
+  , (i + 1, f i x $ ex ys i)
   )
                               
 var :: EType a => Integer -> E a
@@ -181,7 +206,7 @@ ternop o (E x) (E y) (E z) = E $ U.ternop o x y z
 
 binop :: Op -> E a -> E b -> E c
 binop o (E x) (E y) = E $ U.binop o x y
-  
+
 unop :: Op -> E a -> E b
 unop o (E x) = E $ U.unop o x
 
@@ -389,9 +414,18 @@ fkMain n =
     perm0 = (0xfedcba987654321, (0x1111111111111111, 2))
 
 -- spectral-norm
-evalA :: E Double -> E Double -> E Double
-evalA i j = 1.0/((i+j)*(i+j+1)/2+i+1)
+evalA :: E Word -> E Word -> E Double
+evalA i0 j0 = 1.0/((i+j)*(i+j+1)/2+i+1)
+  where (i,j) = (tofp i0, tofp j0)
 
--- evalATimesU :: (Size sz) => V sz Double -> V sz Double
-evalATimesU u au = undefined
-  
+evalATimesU :: Count c => E (V c Double) -> E (V c Double)
+evalATimesU = evalATimesUF id
+
+evalAtTimesU :: Count c => E (V c Double) -> E (V c Double)
+evalAtTimesU = evalATimesUF flip
+
+evalATimesUF f u =
+  vunfoldi_ $ \i -> (vfoldi (\j b a -> b + (f evalA) j i * a) 0 u)
+
+evalAtATimesU :: Count c => E (V c Double) -> E (V c Double)
+evalAtATimesU = evalAtTimesU . evalATimesU
