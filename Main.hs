@@ -1,4 +1,5 @@
 {-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
 import Prelude hiding (max)
@@ -6,11 +7,17 @@ import Shoot
 import Data.Word
 
 data C16
-instance Count C16 where countof _ = 16
+instance Count C16 where ecountof _ = 16
+data C4
+instance Count C4 where ecountof _ = 4
 
 main :: IO ()
 main = compile $
-  (ex (vec [5 .. ] :: E (V C16 Int)) (var 0))
+  let arr :: E (V C4 Int) = vec [5 .. ] in
+  (vfold (+) (var 0) arr)
+  -- (ex (vmap (+ 1) arr) (var 0))
+  -- (ex arr (var 0))
+  -- doesn't work (ex (ex (vec (repeat $ vec [5 .. ]) :: E (V C4 (V C4 Int))) (var 0)) (var 0))
   -- (ex (var 0) (vec [0 .. ] :: E (V C16 Int)))
   -- evalA 1 (var 0)
   -- ((snd $ fkMain (var 0)) :: E Int)

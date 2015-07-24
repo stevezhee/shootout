@@ -21,11 +21,18 @@ class EType a where etypeof :: a -> Type
 
 instance EType a => Typed (E a) where typeof (_ :: E a) = etypeof (unused "etypeof:E a" :: a)
 
-class Count c where countof :: c -> Integer
+class Count c where ecountof :: c -> Integer
 
 instance (Count c, EType a) => EType (V c a) where
-  etypeof (_ :: V c a) = TVector (countof (unused "countof:V c a" :: c)) (etypeof (unused "typeof:V c a" :: a))
+  etypeof (_ :: V c a) =
+    TVector (ecountof (unused "countof:V c a" :: c))
+      (etypeof (unused "typeof:V c a" :: a))
 
+class Counted a where countof :: a -> E Word
+
+instance (Count c) => Counted (E (V c a)) where
+  countof (_ :: E (V c a)) = fromIntegral $ ecountof (unused "countof:E (V c a)" :: c)
+  
 data V c a
 
 assert s b a = if b then a else error $ "assert:" ++ s
@@ -40,9 +47,10 @@ vec :: (Count c, EType a) => [E a] -> E (V c a)
 vec (xs :: [E a]) = f (unused "vec")
   where
     f :: (Count c, EType a) => c -> E (V c a)
-    f c = assert "vec:length mismatch" (not (null bs) && length bs == cnt) $ foldl' ins undef $ zip bs [0 .. ]
+    f c = assert "vec:length mismatch" (not (null bs) && length bs == cnt) $
+          foldl' ins undef $ zip bs [0 .. ]
       where
-      cnt = fromIntegral $ countof c
+      cnt = fromIntegral $ ecountof c
       bs = take cnt xs
 
 ex :: (Count c, EType a) => E (V c a) -> E Word -> E a
@@ -51,6 +59,21 @@ ex = binop U.ExtractElement
 ins :: (Count c, EType a) => E (V c a) -> (E a, E Word) -> E (V c a)
 ins x (y, z) = ternop U.InsertElement x y z
 
+vupd :: (Count c, EType a) => E (V c a) -> (E a -> E a, E Word) -> E (V c a)
+vupd x (f, z) = ins x (f $ ex x z, z)
+
+vmap :: (Count c, EType a) => (E a -> E a) -> E (V c a) -> E (V c a)
+vmap f xs = snd $ while (0, xs) $ \(i, xs) ->
+  ( i `lt` countof xs
+  , (i + 1, vupd xs (f, i))
+  )
+
+vfold :: (Count c, EType a, Aggregate b) => (b -> E a -> b) -> b -> E (V c a) -> b
+vfold f x ys = snd $ while (0, x) $ \(i, x) ->
+  ( i `lt` countof ys
+  , (i + 1, f x $ ex ys i)
+  )
+                              
 var :: EType a => Integer -> E a
 var x = let v = E $ U.var (typeof v) x in v
 
