@@ -19,18 +19,18 @@ void print_v16w4(uint64_t x)
 }
 
 //#define NBODY
-#define FANNKUCHREDUX
-//#define SPECTRAL
+//#define FANNKUCHREDUX
+#define SPECTRAL
 
 #if defined(NBODY)
 double foo(int);
 #endif
 #if defined(FANNKUCHREDUX)
-// BAL: int foo(int);
-int foo(unsigned int); //BAL: just prototyping
+int foo(int);
 #endif
 #if defined(SPECTRAL)
-double foo(int);
+// double foo(int);
+int foo(unsigned int);
 #endif
 
 void arg_check(int argc, int n)
@@ -67,7 +67,8 @@ int main(int argc, char ** argv)
   printf("spectral:");
   arg_check(argc, 1);
   int n = atoi(argv[1]);
-  printf("%0.9f\n",foo(n));
+  // BAL: printf("%0.9f\n",foo(n));
+  printf("%d\n",foo(n));
 #endif
   return 0;
 }

@@ -17,10 +17,12 @@ import           Control.Exception
 import           Control.Monad.State hiding (mapM, sequence)
 import qualified Data.HashMap.Strict as M
 import           Data.Hashable
-import           Data.List hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr, concat)
+import  Data.List
+  hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr, concat)
 import           Data.Maybe
 import           GHC.Generics (Generic)
-import           Prelude hiding (lookup, elem, maximum, concatMap, mapM, sequence, foldr, concat)
+import  Prelude
+  hiding (lookup, elem, maximum, concatMap, mapM, sequence, foldr, concat)
 import qualified Text.PrettyPrint as PP
 import           Text.PrettyPrint hiding (int, empty)
 import Data.Array
@@ -99,7 +101,8 @@ llvmPhi (x, ys) =
   llvmName x := A.Phi (llvmTypeof x) (map (mapPair llvmOperand llvmName) ys) []
   
 llvmInsn :: (Free, (Op, [AExp])) -> Named A.Instruction
-llvmInsn (x, (y, zs)) = llvmName x := (llvmOp (typeof $ head zs) y) (map llvmOperand zs)
+llvmInsn (x, (y, zs)) =
+  llvmName x := (llvmOp (typeof $ head zs) y) (map llvmOperand zs)
 
 class Typed a where typeof :: a -> Type
 
@@ -126,7 +129,8 @@ llvmType x = case x of
   where
     tint = A.IntegerType . fromIntegral
   
-data Type = TSInt Integer | TUInt Integer | TDouble | TAggregate | TVector Integer Type
+data Type
+  = TSInt Integer | TUInt Integer | TDouble | TAggregate | TVector Integer Type
   deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
 
@@ -150,12 +154,6 @@ llvmOp t x = case x of
   Gte -> ucmp IP.UGE IP.SGE FP.OGE
   Lte -> ucmp IP.ULE IP.SLE FP.OLE
   Sqrt -> uunary (unused "Sqrt:unsigned") (unused "Sqrt:signed") (call1 llvmSqrt)
-  SubR -> rev Sub
-  QuotR -> rev Quot
-  RemR -> rev Rem
-  ShlR -> rev Shl
-  LshrR -> rev Lshr
-  AshrR -> rev Ashr
   ExtractElement -> \[a,b] -> A.ExtractElement a b []
   InsertElement -> \[a,b,c] -> A.InsertElement a b c []
   _ -> error $ "llvmOp:" ++ show x
@@ -179,7 +177,10 @@ llvmOp t x = case x of
       TDouble -> h a b []
     cmp f g = ucmp f f g
     ucmp f g h = ubinary (A.ICmp f) (A.ICmp g) (A.FCmp h)
-    call n bs = A.Call False CC.C [] (Right $ ConstantOperand $ C.GlobalReference (llvmType t) $ Name n) (map (flip pair []) bs) []
+    call n bs =
+      A.Call False CC.C []
+        (Right $ ConstantOperand $ C.GlobalReference (llvmType t) $ Name n)
+        (map (flip pair []) bs) []
     call1 n b = call n [b]
 
 llvmOperand :: AExp -> Operand
@@ -231,10 +232,12 @@ data User = User Type Integer deriving (Show, Eq, Ord, Generic)
 instance Hashable User
 instance PP User where pp (User _ a) = text "U" <> integer a
 
-data Bound = Bound{ btype :: Type, blabel :: Maybe Label, bid :: Integer } deriving (Show, Eq, Ord, Generic)
+data Bound = Bound{ btype :: Type, blabel :: Maybe Label, bid :: Integer }
+  deriving (Show, Eq, Ord, Generic)
 instance Hashable Bound
 instance PP Bound where
-  pp (Bound _ m a) = text "B" <> d <> text "." <> integer a where d = maybe (text "?") (pp . lid) m
+  pp (Bound _ m a) = text "B" <> d <> text "." <> integer a
+    where d = maybe (text "?") (pp . lid) m
   
 newtype Label = Label{ lid :: Integer } deriving (Show, Eq, Num, Ord, Generic, Enum)
 instance Hashable Label
@@ -243,10 +246,8 @@ instance PP Label where pp (Label a) = text "L" <> integer a
 data Op
   = Add | Mul
   | Sub | Quot | Rem
-  | SubR | QuotR | RemR
   | And | Or | Xor
   | Shl | Lshr | Ashr
-  | ShlR | LshrR | AshrR
   | Eq | Ne
   | Gt | Lt | Gte | Lte
   | Abs | Signum
@@ -274,16 +275,17 @@ data AExp -- don't reorder -- BAL: Could also break out constants and allow cons
   deriving (Show, Eq, Generic, Ord)
 instance Hashable AExp
 
-typeofOp x y
+typeofOp x (a:bs)
   | x `elem` [Eq, Ne, Gt, Lt, Gte, Lte] = tbool
-  | otherwise = typeof y
+  | x == ExtractElement = typeof $ head bs
+  | otherwise = typeof a
 
 tbool = TUInt 1
 
 instance Typed Exp where
   typeof x = case x of
     EAExp a -> typeof a
-    EOp _ a bs -> typeofOp a $ head bs
+    EOp _ a bs -> typeofOp a bs
     ESwitch{} -> TAggregate
     EWhile{} -> TAggregate
     EPhi a _ -> typeof a
@@ -352,8 +354,8 @@ pushTerm x = modify $ \st ->
   st{ blocks = let b:bs = blocks st in b{ term = x, insns = reverse $ insns b } : bs }
 
 pushLabel :: Label -> [(Bound, [(AExp, Label)])] -> N ()
-pushLabel lbl ps =
-  modify $ \st -> st{ blocks = Block lbl (map f ps) [] (unused "pushLabel") : blocks st }
+pushLabel lbl ps = modify $ \st ->
+  st{ blocks = Block lbl (map f ps) [] (unused "pushLabel") : blocks st }
   where
     f (a,b) = (nameBound a $ Just lbl, b)
 
@@ -376,7 +378,9 @@ sortByFst :: (Ord a) => [(a,b)] -> [(a,b)]
 sortByFst = sortBy (\a b -> compare (fst a) (fst b))
 
 groupByFst :: (Eq a, Ord a) => [(a,b)] -> [(a, [b])]
-groupByFst = map (\bs -> (fst $ head bs, map snd bs)) . groupBy (\a b -> fst a == fst b) . sortByFst
+groupByFst =
+  map (\bs -> (fst $ head bs, map snd bs)) .
+  groupBy (\a b -> fst a == fst b) . sortByFst
 
 computes = mapM compute
   
@@ -407,7 +411,8 @@ nameBound :: Bound -> Maybe Label -> Bound
 nameBound x mlbl = x{ blabel = mlbl }
 
 pushFree n mx = modify $ \st -> st{ fvars = fvars st // [(fid n, mx)] }
-pushBounds lbl xs = modify $ \st -> st{ bvars = bvars st // [(bid r, Just lbl) | r <- xs ] }
+pushBounds lbl xs =
+  modify $ \st -> st{ bvars = bvars st // [(bid r, Just lbl) | r <- xs ] }
 
 computeStmt :: AExp -> N ()
 computeStmt x = case x of
@@ -456,7 +461,8 @@ computeStmt x = case x of
             pushTerm $ Jump begin
             
             pushLabel begin
-              [ (r, [(p, pre), (q, from)]) | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1 ]
+              [ (r, [(p, pre), (q, from)])
+              | (r, p, q) <- zip3 (map fst bs) vbs0 vbs1 ]
             pushTerm $ Jump test
 
             pushLabel end []
@@ -547,7 +553,7 @@ constFold o xs = case xs of
   [Int _ a, b@Rat{}] -> constFold o [Rat t $ toRational a, b]
   _ -> unused "constFold"
   where
-  t = typeofOp o $ head xs
+  t = typeofOp o xs
   f :: Integer -> AExp
   f = case o of
     Abs -> Int t . abs
@@ -645,17 +651,18 @@ toAExp x = case x of
 
 canonCExp x = case x of
   COp a [b, c] | b > c -> case a of
-    Sub -> f SubR
-    Quot -> f QuotR
-    Rem -> f RemR
-    Shl -> f ShlR
-    Lshr -> f LshrR
-    Ashr -> f AshrR
+    Add -> f Add
+    Mul -> f Mul
+    And -> f And
+    Or -> f Or
+    Xor -> f Xor
+    Eq -> f Eq
+    Ne -> f Ne
     Gt -> f Lt
     Lt -> f Gt
     Gte -> f Lte
     Lte -> f Gte
-    _ -> f a
+    _ -> x
     where
     f a' = COp a' [c, b]
   _ -> x
@@ -679,7 +686,9 @@ cexp :: Exp -> M CExp
 cexp x = case x of
   EAExp a -> return $ CAExp a
   EOp _ b cs -> COp b <$> mapM aexp cs
-  ESwitch _ vs b cs d -> CSwitch (toList vs) <$> aexp b <*> mapM (mapM aexp . toList) cs <*> mapM aexp (toList d)
+  ESwitch _ vs b cs d ->
+    CSwitch (toList vs) <$> aexp b <*> mapM (mapM aexp . toList) cs <*>
+    mapM aexp (toList d)
   EWhile _ a bs -> CWhile <$> aexp a <*> mapM f (toList bs)
     where f (v, ps) = pair v <$> mapM aexp ps
   EPhi a b -> CPhi a <$> aexp b
@@ -806,10 +815,12 @@ compile x = do
   -- print $ pp x -- this gets big very quickly due to redundancy
   let a = runCExpMap x
   -- print $ pp a
---  print a
+  -- print a
   let (us, bs) = runBlocks (maxBV x) a
-  print $ pp bs
-  llvmAsm [(llvmTypeof $ fst a, "foo", us, map llvmBlock bs)]
+  -- print $ pp bs
+  let blcks = map llvmBlock bs
+  -- print blcks
+  llvmAsm [(llvmTypeof $ fst a, "foo", us, blcks)]
 
 llvmAsm xs = do
   eab <- withContext $ \cxt ->
@@ -825,7 +836,8 @@ runBlocks nbv (x, y) = (sort $ S.toList $ uvars st, sortByCompare label $ blocks
       { blocks = [Block 0 [] [] $ unused "runBlocks"]
       , nextLabel = 1
       , uvars = S.empty
-      , fvars = array (0, pred $ next y) $ map (\(a,b) -> (b, Just a)) $ M.toList $ hmapR y
+      , fvars = array (0, pred $ next y) $ map (\(a,b) -> (b, Just a)) $
+                M.toList $ hmapR y
       , bvars = array (0, pred nbv) $ zip [0 .. pred nbv] $ repeat Nothing
       }
 

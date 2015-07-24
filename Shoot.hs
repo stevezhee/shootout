@@ -45,8 +45,8 @@ vec (xs :: [E a]) = f (unused "vec")
       cnt = fromIntegral $ countof c
       bs = take cnt xs
 
-ex :: (Count c, EType a) => E Word -> E (V c a) -> E a
-ex = flip (binop U.ExtractElement)
+ex :: (Count c, EType a) => E (V c a) -> E Word -> E a
+ex = binop U.ExtractElement
 
 ins :: (Count c, EType a) => E (V c a) -> (E a, E Word) -> E (V c a)
 ins x (y, z) = ternop U.InsertElement x y z

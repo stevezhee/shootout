@@ -7,12 +7,10 @@ import Data.Word
 
 data C16
 instance Count C16 where countof _ = 16
-data C1
-instance Count C1 where countof _ = 1
 
 main :: IO ()
 main = compile $
-  (ex (var 0) (vec [0 .. ] :: E (V C1 Int)))
+  (ex (vec [5 .. ] :: E (V C16 Int)) (var 0))
   -- (ex (var 0) (vec [0 .. ] :: E (V C16 Int)))
   -- evalA 1 (var 0)
   -- ((snd $ fkMain (var 0)) :: E Int)
