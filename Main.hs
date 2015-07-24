@@ -6,15 +6,22 @@ import Prelude hiding (max)
 import Shoot
 import Data.Word
 
-data C16
+data C16 = C16
 instance Count C16 where ecountof _ = 16
-data C4
+data C4 = C4
 instance Count C4 where ecountof _ = 4
+data C1 = C1
+instance Count C1 where ecountof _ = 1
+data C2 = C2
+instance Count C2 where ecountof _ = 2
+data C5500 = C5500
+instance Count C5500 where ecountof _ = 5500
 
 main :: IO ()
 main = compile $
-  let arr :: E (V C4 Int) = vec [5 .. ] in
-  (vfold (+) (var 0) arr)
+  spctMain C1
+  -- let arr :: E (V C4 Int) = vec [5 .. ] in
+  -- (vfold (+) (var 0) arr)
   -- (ex (vmap (+ 1) arr) (var 0))
   -- (ex arr (var 0))
   -- doesn't work (ex (ex (vec (repeat $ vec [5 .. ]) :: E (V C4 (V C4 Int))) (var 0)) (var 0))

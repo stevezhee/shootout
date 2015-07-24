@@ -50,19 +50,23 @@ double foo(int N)
   double u[N],v[N],vBv,vv;
   for(i=0;i<N;i++)
     {
-      u[i]=1;
+      // BAL: u[i]=1;
+      u[i]=3; // BAL:
+      v[i]=2; // BAL:
     }
 
-  for(i=0;i<10;i++)
-    {
-      eval_AtA_times_u(N,u,v);
-      eval_AtA_times_u(N,v,u);
-    }
+  /* for(i=0;i<1;i++) */
+  /*   //  for(i=0;i<10;i++) */
+  /*   { */
+  /*     eval_AtA_times_u(N,u,v); */
+  /*     eval_AtA_times_u(N,v,u); */
+  /*   } */
   vBv=vv=0;
   for(i=0;i<N;i++)
     {
       vBv+=u[i]*v[i];
-      vv+=v[i]*v[i];
+      /* vv+=v[i]*v[i]; */
     }
-  return(sqrt(vBv/vv));
+  return(vBv);
+  // BAL: return(sqrt(vBv/vv));
 }

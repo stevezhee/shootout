@@ -278,10 +278,14 @@ data AExp -- don't reorder -- BAL: Could also break out constants and allow cons
   deriving (Show, Eq, Generic, Ord)
 instance Hashable AExp
 
-typeofOp x (a:bs)
+typeofOp x ys@(a:_)
   | x `elem` [Eq, Ne, Gt, Lt, Gte, Lte] = tbool
-  | x == ExtractElement = typeof $ head bs
-  | otherwise = typeof a
+  | x == ExtractElement = ee
+  | otherwise = case x of
+      ToFP t -> t
+      _ -> typeof a
+  where
+    TVector _ ee = typeof a
 
 tbool = TUInt 1
 

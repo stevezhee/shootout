@@ -29,8 +29,7 @@ double foo(int);
 int foo(int);
 #endif
 #if defined(SPECTRAL)
-// double foo(int);
-int foo(unsigned int);
+double foo(int);
 #endif
 
 void arg_check(int argc, int n)
@@ -66,9 +65,9 @@ int main(int argc, char ** argv)
 #if defined(SPECTRAL)
   printf("spectral:");
   arg_check(argc, 1);
-  int n = atoi(argv[1]);
-  // BAL: printf("%0.9f\n",foo(n));
-  printf("%d\n",foo(n));
+  unsigned int n = atoi(argv[1]);
+  double d = foo(atoi(argv[1]));
+  printf("(%d)=%0.9f\n",n,d);
 #endif
   return 0;
 }

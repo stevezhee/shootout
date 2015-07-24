@@ -37,14 +37,11 @@ data V c a
 
 assert s b a = if b then a else error $ "assert:" ++ s
 
-tofp :: (EType a, Integral a, Floating b) => E a -> E b
-tofp x = unop (U.ToFP $ typeof x) x
+tofp :: (EType a, EType b, Integral a, Floating b) => E a -> E b
+tofp x = let b = unop (U.ToFP $ typeof b) x in b
 
 undef :: (EType a) => E a
-undef = f (unused "undef")
-  where
-    f :: (EType a) => a -> E a
-    f = E . U.EAExp . U.Undef . etypeof
+undef = let a = E $ U.EAExp $ U.Undef $ typeof a in a
 
 vec :: (Count c, EType a) => [E a] -> E (V c a)
 vec (xs :: [E a]) = f (unused "vec")
@@ -81,9 +78,12 @@ vmapi f xs = snd $ while (0, xs) $ \(i, xs) ->
 vfold :: (Count c, EType a, Aggregate b) => (b -> E a -> b) -> b -> E (V c a) -> b
 vfold f = vfoldi $ \_ -> f
 
+vrepeat :: (Count c, EType a) => E a -> E (V c a)
+vrepeat = vunfoldi_ . const
+
 vunfoldi_ :: (Count c, EType a) => (E Word -> E a) -> E (V c a)
 vunfoldi_ f = vunfoldi (\i _ -> (f i, b)) b
-  where b :: E Word = unused "vunfoldi_"
+  where b :: E Word = undef -- BAL: this should work, but doesn't.  being too strict somewhere unused "vunfoldi_"
 
 vunfoldi :: (Count c, Aggregate b, EType a) =>
   (E Word -> b -> (E a, b)) -> b -> E (V c a)
@@ -164,6 +164,12 @@ emax x y = eif (x `gte` y) x y
 while :: (Aggregate a) => a -> (a -> (E Bool, a)) -> a
 while x f = agg $ U.while (unAgg x) g
   where g = \bs -> let (a, b) = f (agg bs) in (unE a, unAgg b)
+
+reps :: (Aggregate b) => E Word -> b -> (b -> b) -> b
+reps n b f = snd $ while (n,b) $ \(n,b) ->
+  (n `gt` 0
+  , (n - 1, f b)
+  )
 
 eif :: (EType a) => E Bool -> E a -> E a -> E a
 eif x y z = switch x [z] y
@@ -413,19 +419,34 @@ fkMain n =
   where
     perm0 = (0xfedcba987654321, (0x1111111111111111, 2))
 
+
 -- spectral-norm
-evalA :: E Word -> E Word -> E Double
-evalA i0 j0 = 1.0/((i+j)*(i+j+1)/2+i+1)
-  where (i,j) = (tofp i0, tofp j0)
+type EvalF = E Word -> E Word -> E Double
 
-evalATimesU :: Count c => E (V c Double) -> E (V c Double)
-evalATimesU = evalATimesUF id
+-- evalA :: E Word -> E Word -> E Double
+-- evalA i0 j0 = 1.0/((i+j)*(i+j+1)/2+i+1) where (i,j) = (tofp i0, tofp j0)
 
-evalAtTimesU :: Count c => E (V c Double) -> E (V c Double)
-evalAtTimesU = evalATimesUF flip
+-- evalATimesUF :: Count c => (EvalF -> EvalF) -> E (V c Double) -> E (V c Double)
+-- evalATimesUF f u = vunfoldi_ $ \i -> (vfoldi (\j b a -> b + (f evalA) j i * a) 0 u)
 
-evalATimesUF f u =
-  vunfoldi_ $ \i -> (vfoldi (\j b a -> b + (f evalA) j i * a) 0 u)
+-- evalATimesU :: Count c => E (V c Double) -> E (V c Double)
+-- evalATimesU = evalATimesUF id
 
-evalAtATimesU :: Count c => E (V c Double) -> E (V c Double)
-evalAtATimesU = evalAtTimesU . evalATimesU
+-- evalAtTimesU :: Count c => E (V c Double) -> E (V c Double)
+-- evalAtTimesU = evalATimesUF flip
+
+-- evalAtATimesU :: Count c => E (V c Double) -> E (V c Double)
+-- evalAtATimesU = evalAtTimesU . evalATimesU
+
+-- spctMain :: Count c => c -> E Double
+-- spctMain (c :: c) = sqrt(vBv/vv)
+--   where
+--     (u, v) = reps 10 (vrepeat 1 :: E (V c Double), undef) $ \(u,_) ->
+--              let v = evalAtATimesU u in (v, evalAtATimesU v)
+--     (vBv,vv) = vfoldi  (\i (vBv, vv) vi -> (u `ex` i * vi, vi^2)) (0,0) v
+
+-- BAL: tickles bug
+spctMain :: Count c => c -> E Double
+spctMain (c :: c) = vfoldi  (\i _ vi -> u `ex` i * vi) 0 v
+  where
+    (u, v) = (vrepeat 3 :: E (V c Double), vrepeat 2 :: E (V c Double))

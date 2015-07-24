@@ -2,11 +2,12 @@ CC = clang -O3 -lm
 
 all : a.exe nbody.exe fannkuch.exe spectral.exe
 	ls -al $^
-	./a.exe 2
 	# ./a.exe 2000
-	./spectral.exe 2000
+	# ./spectral.exe 5500 # spectral:(5500)=1.274224153
 	# ./fannkuch.exe 7
 	# ./nbody.exe 1
+	./a.exe 2
+	./spectral.exe 2
 
 t.ll : Main.hs Shoot.hs Untyped.hs
 	stack install
