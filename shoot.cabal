@@ -17,5 +17,5 @@ cabal-version:       >=1.8
 executable shoot
   main-is: Main.hs
   other-modules: Shoot, Untyped
-  build-depends: base, pretty, array, hashable, mtl, unordered-containers, transformers-compat, containers, llvm-general-pure, llvm-general
+  build-depends: base, pretty, array, hashable, mtl, unordered-containers, transformers-compat, containers, llvm-general-pure, llvm-general, graphviz, process, text
 

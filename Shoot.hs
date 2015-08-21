@@ -83,7 +83,7 @@ vrepeat = vunfoldi_ . const
 
 vunfoldi_ :: (Count c, EType a) => (E Word -> E a) -> E (V c a)
 vunfoldi_ f = vunfoldi (\i _ -> (f i, b)) b
-  where b :: E Word = undef -- BAL: this should work, but doesn't.  being too strict somewhere unused "vunfoldi_"
+  where b :: E Word = undef -- BAL: b = undefined this should work, but doesn't.  being too strict somewhere unused "vunfoldi_"
 
 vunfoldi :: (Count c, Aggregate b, EType a) =>
   (E Word -> b -> (E a, b)) -> b -> E (V c a)

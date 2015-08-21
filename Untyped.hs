@@ -43,6 +43,10 @@ import qualified Data.Set as S
 import Data.Foldable
 import Data.Traversable
 import Data.Bits
+import Data.Graph hiding (Tree, Node)
+import Data.GraphViz hiding (Int)
+import System.Process
+import qualified Data.Text.Lazy.IO as T
 
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
 
@@ -238,8 +242,10 @@ data Bound = Bound{ btype :: Type, blabel :: Maybe Label, bid :: Integer }
   deriving (Show, Eq, Ord, Generic)
 instance Hashable Bound
 instance PP Bound where
-  pp (Bound _ m a) = text "B" <> d <> text "." <> integer a
-    where d = maybe (text "?") (pp . lid) m
+  pp (Bound _ m a) = text "B" <> d <> integer a
+    where
+      -- d = maybe (text "?") (pp . lid) m
+      d = maybe PP.empty (\i -> pp (lid i) <> text ".") m
   
 newtype Label = Label{ lid :: Integer } deriving (Show, Eq, Num, Ord, Generic, Enum)
 instance Hashable Label
@@ -261,7 +267,28 @@ data Op
   | ToFP Type
   deriving (Show, Eq, Ord, Generic)
 instance Hashable Op
-instance PP Op where pp = text . show
+instance PP Op where
+  pp x = text $ case x of
+    Add -> "+"
+    Mul -> "*"
+    Sub -> "-"
+    Quot -> "/"
+    Rem -> "%"
+    And -> "&"
+    Or -> "|"
+    Xor -> "^"
+    Shl -> "<<"
+    Lshr -> ">>"
+    Ashr -> ">>>"
+    Eq -> "=="
+    Ne -> "!="
+    Gt -> ">"
+    Lt -> "<"
+    Gte -> ">="
+    Lte -> "<="
+    _ -> show x
+
+isBinop = flip elem [Add, Mul, Sub, Quot, Rem, And, Or, Xor, Shl, Lshr, Ashr, Eq, Ne, Gt, Lt, Gte, Lte]
 
 instance PP Integer where pp = integer
 instance PP Rational where pp = rational
@@ -352,10 +379,6 @@ lookupFree x = flip (!) (fid x) <$> gets fvars
 lookupBound :: Bound -> N (Maybe Label)
 lookupBound x = flip (!) (bid x) <$> gets bvars
 
-pushInsn :: (Free, (Op, [AExp])) -> N ()
-pushInsn x =
-  modify $ \st -> st{ blocks = let b:bs = blocks st in b{ insns = x : insns b } : bs }
-
 pushTerm :: Terminator -> N ()
 pushTerm x = modify $ \st ->
   st{ blocks = let b:bs = blocks st in b{ term = x, insns = reverse $ insns b } : bs }
@@ -389,6 +412,14 @@ groupByFst =
   map (\bs -> (fst $ head bs, map snd bs)) .
   groupBy (\a b -> fst a == fst b) . sortByFst
 
+nameBound :: Bound -> Maybe Label -> Bound
+nameBound x mlbl = x{ blabel = mlbl }
+
+pushFree n mx = modify $ \st -> st{ fvars = fvars st // [(fid n, mx)] }
+pushBounds lbl xs =
+  modify $ \st -> st{ bvars = bvars st // [(bid r, Just lbl) | r <- xs ] }
+
+computes :: [AExp] -> N [AExp]
 computes = mapM compute
   
 compute :: AExp -> N AExp
@@ -405,7 +436,7 @@ compute x = case x of
       CAExp a -> return a
       COp a bs -> do
         vbs <- computes bs
-        pushInsn (n, (a,vbs))
+        modify $ \st -> st{ blocks = let b:bs = blocks st in b{ insns = (n, (a,vbs)) : insns b } : bs }
         ok x
       CPhi a b -> do
         computeStmt b
@@ -413,13 +444,6 @@ compute x = case x of
       _ -> unused "compute:FVar"
   BVar a -> (BVar . nameBound a) <$> lookupBound a
   _ -> return x
-
-nameBound :: Bound -> Maybe Label -> Bound
-nameBound x mlbl = x{ blabel = mlbl }
-
-pushFree n mx = modify $ \st -> st{ fvars = fvars st // [(fid n, mx)] }
-pushBounds lbl xs =
-  modify $ \st -> st{ bvars = bvars st // [(bid r, Just lbl) | r <- xs ] }
 
 computeStmt :: AExp -> N ()
 computeStmt x = case x of
@@ -694,9 +718,13 @@ cexp :: Exp -> M CExp
 cexp x = case x of
   EAExp a -> return $ CAExp a
   EOp _ b cs -> COp b <$> mapM aexp cs
-  ESwitch _ vs b cs d ->
-    CSwitch (toList vs) <$> aexp b <*> mapM (mapM aexp . toList) cs <*>
-    mapM aexp (toList d)
+  ESwitch _ vs b cs d -> do
+    cs' <- mapM (mapM aexp . toList) cs
+    d' <- mapM aexp (toList d)
+    case reverse $ dropWhile ((==) d') $ reverse cs' of
+      [] -> return $ CSwitch (toList vs) (Undef $ TUInt 1) [] d' -- BAL: haven't tested this yet
+      cs'' -> aexp b >>= \b' -> return $ CSwitch (toList vs) b' cs'' d'
+    
   EWhile _ a bs -> CWhile <$> aexp a <*> mapM f (toList bs)
     where f (v, ps) = pair v <$> mapM aexp ps
   EPhi a b -> CPhi a <$> aexp b
@@ -705,16 +733,28 @@ instance PP Block where
   pp (Block a b c d) = vcat [pp a, nest 2 $ vcat $ map pp b ++ map pp c ++ [pp d]]
 
 instance PP [Block] where pp = vcat . map pp
-  
-ppSwitch a bs c = parens $ hsep $ text "switch" : pp a : map pp bs ++ [pp c]
-  
+
+ppSwitch a bs c = hsep $ text "switch" : pp a : map pp bs ++ [pp c]
+
+ppParens x = case x of
+  EAExp{} -> pp x
+  _ -> parens $ pp x
+
 instance PP Exp where
   pp x = case x of
     ESwitch _ _ a bs c -> ppSwitch a bs c
-    EOp _ a bs -> parens (pp a <+> hsep (map pp bs))
+    EOp _ a bs
+      | a == ExtractElement -> pp b0 <> brackets (pp b1)
+      | a == InsertElement -> pp b0 <> brackets (pp b2) <+> text "<-" <+> pp b1
+      | isBinop a -> ppParens b0 <+> pp a <+> ppParens b1
+      | otherwise -> pp a <+> hsep (map ppParens bs)
+      where
+        b0:_ = bs
+        _:b1:_ = bs
+        _:_:b2:_ = bs
     EAExp a -> pp a
-    EWhile _ a bs -> parens $ vcat [text "while", nest 2 $ vcat [pp a, pp bs]]
-    EPhi a b -> parens (pp a <+> pp b)
+    EWhile _ a bs -> vcat [text "while", nest 2 $ vcat [ppParens a, pp bs]]
+    EPhi a b -> hsep [text "phi", pp a, ppParens b]
 
 instance (Foldable t, PP a) => PP (t a) where pp = pp . toList
 
@@ -816,19 +856,25 @@ type N a = State St a
   
 type M a = State (MapR Integer CExp) a
 
+runCExpMap :: Exp -> (AExp, MapR Integer CExp)
 runCExpMap = flip runState (MapR M.empty 0) . aexp
 
 compile :: Exp -> IO ()
 compile x = do
   -- print $ pp x -- this gets big very quickly due to redundancy
-  let a = runCExpMap x
+  let (a,b) = runCExpMap x
+  let n = next b
+  let bs = map swap $ M.toList $ hmapR b
   -- print $ pp a
   -- print a
-  let (us, bs) = runBlocks (maxBV x) a
+  viz n bs
+{-
+  let (us, bs) = runBlocks (maxBV x) a n bs
   -- print $ pp bs
   let blcks = map llvmBlock bs
   -- print blcks
   llvmAsm [(llvmTypeof $ fst a, "foo", us, blcks)]
+-}
 
 llvmAsm xs = do
   eab <- withContext $ \cxt ->
@@ -837,15 +883,39 @@ llvmAsm xs = do
   
 sortByCompare f = sortBy $ \a b -> compare (f a) (f b)
 
-runBlocks :: Integer -> (AExp, MapR Integer CExp) -> ([User], [Block])
-runBlocks nbv (x, y) = (sort $ S.toList $ uvars st, sortByCompare label $ blocks st)
+runBlocks :: Integer -> AExp -> Integer -> [(Integer, CExp)] -> ([User], [Block])
+runBlocks nbv x n ys = (sort $ S.toList $ uvars st, sortByCompare label $ blocks st)
   where
     st = execState (compute x >>= pushTerm . Return) St
       { blocks = [Block 0 [] [] $ unused "runBlocks"]
       , nextLabel = 1
       , uvars = S.empty
-      , fvars = array (0, pred $ next y) $ map (\(a,b) -> (b, Just a)) $
-                M.toList $ hmapR y
+      , fvars = array (0, pred n) $ map (\(a,b) -> (a, Just b)) ys
       , bvars = array (0, pred nbv) $ zip [0 .. pred nbv] $ repeat Nothing
       }
 
+depsAExp x = case x of
+  FVar a -> Just $ fid a
+  _ -> Nothing
+
+depsCExp x = catMaybes $ map depsAExp $ case x of
+  CAExp a -> [a]
+  COp _ bs -> bs
+  CSwitch _ b css ds -> b : ds ++ concat css
+  CWhile a bs -> a : concat (map snd bs)
+  CPhi _ b -> [b]
+
+mkCExpNode :: (Integer, CExp) -> ((Integer, String), [(Integer, Integer, ())])
+mkCExpNode (x,y) = ((x, "F" ++ show x ++ ": " ++ show (pp y)), [(x, a, ()) | a <- depsCExp y])
+
+viz :: Integer -> [(Integer, CExp)] -> IO ()
+viz n xs = do
+  let (bs, css) = unzip $ [((n, "Start"), [(n, n - 1, ())])] ++ map mkCExpNode xs
+
+  let params = nonClusteredParams{ fmtNode = singleton . toLabel . snd }
+  let s = printDotGraph $ graphElemsToDot params bs $ concat css
+  T.writeFile "t.dot" s
+  _ <- system "dot -Gordering=out -Tsvg t.dot > t.dot.svg"
+  return ()  
+
+singleton a = [a]
