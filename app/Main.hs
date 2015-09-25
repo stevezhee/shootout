@@ -3,23 +3,24 @@
 module Main where
 
 import Prelude hiding (max)
-import Shoot
-import Data.Word
+import Typed
+-- import Data.Word
 
-data C16 = C16
-instance Count C16 where ecountof _ = 16
-data C4 = C4
-instance Count C4 where ecountof _ = 4
-data C1 = C1
-instance Count C1 where ecountof _ = 1
-data C2 = C2
-instance Count C2 where ecountof _ = 2
-data C5500 = C5500
-instance Count C5500 where ecountof _ = 5500
+-- data C16 = C16
+-- instance Count C16 where ecountof _ = 16
+-- data C4 = C4
+-- instance Count C4 where ecountof _ = 4
+-- data C1 = C1
+-- instance Count C1 where ecountof _ = 1
+-- data C2 = C2
+-- instance Count C2 where ecountof _ = 2
+-- data C5500 = C5500
+-- instance Count C5500 where ecountof _ = 5500
 
 main :: IO ()
-main = compile $
-  spctMain C1
+main = print "hello, world"
+-- main = compile $
+--   spctMain C1
   -- let arr :: E (V C4 Int) = vec [5 .. ] in
   -- (vfold (+) (var 0) arr)
   -- (ex (vmap (+ 1) arr) (var 0))
