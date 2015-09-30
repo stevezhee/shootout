@@ -16,6 +16,7 @@ import           Data.Hashable
 import           GHC.Generics (Generic)
 import qualified Text.PrettyPrint as PP
 import           Text.PrettyPrint hiding (int, empty)
+import Data.Traversable
 
 -- import Debug.Trace
 -- import           Control.Applicative hiding (empty)
@@ -42,8 +43,7 @@ import           Text.PrettyPrint hiding (int, empty)
 -- import qualified LLVM.General.AST.Float as F
 -- import Data.Set (Set)
 -- import qualified Data.Set as S
--- import Data.Foldable
--- import Data.Traversable
+import Data.Foldable
 -- import Data.Bits
 -- import Data.Graph hiding (Tree, Node)
 -- import Data.GraphViz hiding (Int)
@@ -221,15 +221,7 @@ instance Functor Tree where
 -- instance PP a => PP [a] where pp = parens . hsep . map pp
   
 -- instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
-
-
-
-  
-
-
 -- isBinop = flip elem [Add, Mul, Sub, Quot, Rem, And, Or, Xor, Shl, Lshr, Ashr, Eq, Ne, Gt, Lt, Gte, Lte]
-
-
 -- type NumBV = Integer
 
 class Typed a where typeof :: a -> Type
@@ -251,7 +243,12 @@ instance PP Const where
     Int _ b -> pp b
     Rat _ b -> pp b
     Undef _ -> text "undef"
-
+instance Typed Const where
+  typeof x = case x of
+    Int a _ -> a
+    Rat a _ -> a
+    Undef a -> a
+    
 instance PP Integer where pp = integer
 instance PP Rational where pp = rational
                           
@@ -288,7 +285,12 @@ instance PP Var where
     UVar a -> pp a
     BVar a -> pp a
     FVar a -> pp a
-
+instance Typed Var where
+  typeof x = case x of
+    UVar a -> typeof a
+    BVar a -> typeof a
+    FVar a -> typeof a
+    
 data AExp
   = CAExp Const
   | VAExp Var
@@ -298,7 +300,11 @@ instance PP AExp where
   pp x = case x of
     CAExp a -> pp a
     VAExp a -> pp a
-
+instance Typed AExp where
+  typeof x = case x of
+    CAExp a -> typeof a
+    VAExp a -> typeof a
+    
 data UOp
   = Add | Mul | Sub | Quot | Rem | And | Or | Xor | Shl | Lshr | Ashr | Eq | Ne | Gt | Lt | Gte | Lte
   | Abs | Signum | Sqrt | Exp | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh | Acosh
@@ -327,7 +333,7 @@ instance PP UOp where
     Lte -> "<="
     _ -> show x
 
-data Op = Op{ otype :: Type, uop :: UOp } deriving (Show, Eq, Ord, Generic)
+data Op = Op{ uop :: UOp, otype :: Type  } deriving (Show, Eq, Ord, Generic)
 instance Hashable Op
 instance Typed Op where typeof = otype
 instance PP Op where pp = pp . uop
@@ -336,20 +342,29 @@ data Exp
   = EAExp AExp
   | EOp Op [Exp]
   | ESwitch Exp [Exp] Exp
-  | EWhile Exp (Tree (Bound, (Exp, Exp))) Bound
+  | EWhile Integer Exp (Tree (Bound, (Exp, Exp))) Bound
   deriving (Show, Eq)
 
+instance Typed Exp where
+  typeof x = case x of
+    EAExp a -> typeof a
+    EOp a _ -> typeof a
+    ESwitch _ _ c -> typeof c
+    EWhile _ _ _ c -> typeof c
+    
 maximumBV :: (Foldable t, Functor t) => t Exp -> Integer
 maximumBV = maximum . fmap maxBV
 
 maxBV :: Exp -> Integer
 maxBV x = case x of
-  EAExp a -> case a of
-    VAExp (BVar v) -> bid v
-    _ -> 0
+  EAExp a -> 0
+  -- EAExp a -> case a of
+  --   VAExp (BVar v) -> bid v
+  --   _ -> 0
   EOp _ bs -> maximumBV bs
   ESwitch a bs c -> maximumBV (a : c : bs)
-
+  EWhile n _ _ _ -> n
+  
 zipWithTree :: (a -> b -> c) -> Tree a -> Tree b -> Tree c -- trees must have the same shape
 zipWithTree f x y =
   case (x,y) of
@@ -360,8 +375,8 @@ zipWithTree f x y =
 listToTree :: [Tree a] -> Tree [a]
 listToTree xs@(b:_) = foldr (zipWithTree (:)) (fmap (\_ -> []) b) xs
 
-pairTree :: Tree a -> Tree b -> Tree (a,b)
-pairTree = zipWithTree (,)
+zipTree :: Tree a -> Tree b -> Tree (a,b)
+zipTree = zipWithTree (,)
 
 switch :: Exp -> [Tree Exp] -> Tree Exp -> Tree Exp
 switch x ys z = fmap (\(a:bs) -> ESwitch x bs a) $ listToTree (z : ys)
@@ -370,13 +385,27 @@ bvar :: Bound -> Exp
 bvar = EAExp . VAExp . BVar
 
 while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
-while x f = fmap (EWhile e $ pairTree b $ pairTree x x1) b
+while x f = fmap (EWhile (n+m) e $ zipTree xb $ zipTree x x1) xb
   where
-    x0 :: Tree Exp = fmap bvar b
-    b :: Tree Bound = undefined
-    (e, x1) = f x0
+    m = fromIntegral $ length x
     n = maximum [maximumBV x, maxBV e, maximumBV x1]
+    (e, x1) = f x0
+    x0 :: Tree Exp = fmap bvar xb
+    xb :: Tree Bound =
+      snd $ mapAccumR (\(b:bs) j -> (bs, Bound (typeof j) Nothing b)) [n..] x
 
+tt = while t tbody
+
+tbody = \(Node [Leaf e, Leaf f]) -> (e `lt32` int32 42, Node [Leaf $ add32 (int32 1) e, Leaf $ add32 f e])
+  where
+    add32 x y = EOp (Op Add tsint32) [x,y]
+    lt32 x y = EOp (Op Lt tbool) [x,y]
+
+tsint32 = TSInt 32
+int32 x = EAExp $ CAExp $ Int tsint32 x
+
+t = while (Node [Leaf $ int32 0, Leaf $ int32 4]) tbody
+    
 -- while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
 -- while xs f = fmap (\(v, _) -> EPhi v w) t
 --   -- ^ BAL: identify unused loop variables (remove(warning?) or error)
@@ -399,7 +428,7 @@ while x f = fmap (EWhile e $ pairTree b $ pairTree x x1) b
   -- | EWhile NumBV Exp (Tree (Phi Exp))
   -- | EPhi Bound Exp
 
--- tbool = TUInt 1
+tbool = TUInt 1
 
 -- instance Typed Exp where
 --   typeof x = case x of

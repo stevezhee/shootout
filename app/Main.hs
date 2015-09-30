@@ -4,6 +4,7 @@ module Main where
 
 import Prelude hiding (max)
 import Typed
+import Untyped
 -- import Data.Word
 
 -- data C16 = C16
@@ -18,7 +19,7 @@ import Typed
 -- instance Count C5500 where ecountof _ = 5500
 
 main :: IO ()
-main = print "hello, world"
+main = print tt
 -- main = compile $
 --   spctMain C1
   -- let arr :: E (V C4 Int) = vec [5 .. ] in

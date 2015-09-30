@@ -2,7 +2,7 @@ CC = clang -O3 -lm
 
 all :
 	stack install
-
+	~/.local/bin/shootout-exe
 # all : a.exe nbody.exe fannkuch.exe spectral.exe
 # 	ls -al $^
 # 	# ./a.exe 2000
