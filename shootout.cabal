@@ -16,7 +16,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Typed, Untyped
-  build-depends:       base >= 4.7 && < 5, hashable, pretty
+  build-depends:       base >= 4.7 && < 5, hashable, pretty, monads-tf
   default-language:    Haskell2010
 
 executable shootout-exe

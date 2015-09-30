@@ -19,7 +19,11 @@ import Untyped
 -- instance Count C5500 where ecountof _ = 5500
 
 main :: IO ()
-main = print tt
+main = do
+  print tt
+  let Leaf a = ttt
+  print $ runEval a
+  
 -- main = compile $
 --   spctMain C1
   -- let arr :: E (V C4 Int) = vec [5 .. ] in

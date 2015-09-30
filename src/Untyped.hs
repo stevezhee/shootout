@@ -7,6 +7,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE LambdaCase #-}
 
 -- -XOverlappingInstances is deprecated: instead use per-instance pragmas OVERLAPPING/OVERLAPPABLE/OVERLAPS
 
@@ -21,11 +22,11 @@ import Data.Traversable
 -- import Debug.Trace
 -- import           Control.Applicative hiding (empty)
 -- import           Control.Exception
--- import           Control.Monad.State hiding (mapM, sequence)
+import Control.Monad.State hiding (mapM, sequence)
 -- import qualified Data.HashMap.Strict as M
 -- import  Data.List
 --   hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr, concat)
--- import           Data.Maybe
+import           Data.Maybe
 -- import  Prelude
 --   hiding (lookup, elem, maximum, concatMap, mapM, sequence, foldr, concat)
 -- import Data.Array
@@ -53,17 +54,17 @@ import Data.Foldable
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
 
 instance Foldable Tree where
-  foldr f b x = case x of
+  foldr f b = \case
     Leaf a -> f a b
     Node ns -> foldr (flip (foldr f)) b ns
 
 instance Traversable Tree where
-  traverse f x = case x of
+  traverse f = \case
     Leaf a -> Leaf <$> f a
     Node ns -> Node <$> traverse (traverse f) ns
 
 instance Functor Tree where
-  fmap f x = case x of
+  fmap f = \case
     Leaf a -> Leaf $ f a
     Node ns -> Node $ fmap (fmap f) ns
 
@@ -112,7 +113,7 @@ instance Functor Tree where
 
 
 -- instance Typed AExp where
---   typeof x = case x of
+--   typeof = \case
 --     Int t _ -> t
 --     Rat t _ -> t
 --     FVar a -> typeof a
@@ -123,7 +124,7 @@ instance Functor Tree where
 -- llvmTypeof :: Typed a => a -> A.Type
 -- llvmTypeof = llvmType . typeof
 
--- llvmType x = case x of
+-- llvmType = \case
 --   TSInt a -> tint a
 --   TUInt a -> tint a
 --   TDouble -> A.FloatingPointType 64 A.IEEE
@@ -133,7 +134,7 @@ instance Functor Tree where
   
 
 -- llvmOp :: Type -> Op -> ([Operand] -> A.Instruction)
--- llvmOp t x = case x of
+-- llvmOp t = \case
 --   Add -> binary (nowrap A.Add) (fast A.FAdd)
 --   Sub -> binary (nowrap A.Sub) (fast A.FSub)
 --   Mul -> binary (nowrap A.Mul) (fast A.FMul)
@@ -184,7 +185,7 @@ instance Functor Tree where
 --     call1 n b = call n [b]
 
 -- llvmOperand :: AExp -> Operand
--- llvmOperand x = case x of
+-- llvmOperand = \case
 --   Int t a -> ConstantOperand $ case t of
 --     TUInt b -> C.Int (fromIntegral b) a
 --     TSInt b -> C.Int (fromIntegral b) a
@@ -239,12 +240,12 @@ data Const
   deriving (Show, Eq, Generic, Ord)
 instance Hashable Const
 instance PP Const where
-  pp x = case x of
+  pp = \case
     Int _ b -> pp b
     Rat _ b -> pp b
     Undef _ -> text "undef"
 instance Typed Const where
-  typeof x = case x of
+  typeof = \case
     Int a _ -> a
     Rat a _ -> a
     Undef a -> a
@@ -281,12 +282,12 @@ data Var
   deriving (Show, Eq, Generic, Ord)
 instance Hashable Var
 instance PP Var where
-  pp x = case x of
+  pp = \case
     UVar a -> pp a
     BVar a -> pp a
     FVar a -> pp a
 instance Typed Var where
-  typeof x = case x of
+  typeof = \case
     UVar a -> typeof a
     BVar a -> typeof a
     FVar a -> typeof a
@@ -297,14 +298,14 @@ data AExp
   deriving (Show, Eq, Generic, Ord)
 instance Hashable AExp
 instance PP AExp where
-  pp x = case x of
+  pp = \case
     CAExp a -> pp a
     VAExp a -> pp a
 instance Typed AExp where
-  typeof x = case x of
+  typeof = \case
     CAExp a -> typeof a
     VAExp a -> typeof a
-    
+
 data UOp
   = Add | Mul | Sub | Quot | Rem | And | Or | Xor | Shl | Lshr | Ashr | Eq | Ne | Gt | Lt | Gte | Lte
   | Abs | Signum | Sqrt | Exp | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh | Acosh
@@ -313,7 +314,7 @@ data UOp
   deriving (Show, Eq, Ord, Generic)
 instance Hashable UOp
 instance PP UOp where
-  pp x = text $ case x of
+  pp = text . \case
     Add -> "+"
     Mul -> "*"
     Sub -> "-"
@@ -331,7 +332,7 @@ instance PP UOp where
     Lt -> "<"
     Gte -> ">="
     Lte -> "<="
-    _ -> show x
+    x -> show x
 
 data Op = Op{ uop :: UOp, otype :: Type  } deriving (Show, Eq, Ord, Generic)
 instance Hashable Op
@@ -346,21 +347,86 @@ data Exp
   deriving (Show, Eq)
 
 instance Typed Exp where
-  typeof x = case x of
+  typeof = \case
     EAExp a -> typeof a
     EOp a _ -> typeof a
     ESwitch _ _ c -> typeof c
     EWhile _ _ _ c -> typeof c
-    
+
+binop :: (Rational -> Rational -> Rational) -> [Rational] -> Rational
+binop f = \case
+  [a,b] -> f a b
+  _ -> error "binop"
+
+cmpop :: (Rational -> Rational -> Bool) -> [Rational] -> Rational
+cmpop f = binop $ \a b -> toRational $ fromEnum $ f a b
+
+optbl :: [(UOp, [Rational] -> Rational)]
+optbl =
+  (Add, binop (+)) :
+  (Sub, binop (-)) :
+  (Mul, binop (*)) :
+  (Quot, binop (/)) :
+  (Eq, cmpop (==)) :
+  (Ne, cmpop (/=)) :
+  (Lt, cmpop (<)) :
+  (Gt, cmpop (>)) :
+  (Lte, cmpop (<=)) :
+  (Gte, cmpop (>=)) :
+  []
+
+data St = St{ env :: [(Var, Rational)] } deriving Show
+
+type Eval a = State St a
+
+evalBound b e = eval e >>= \v -> modify $ \st -> st{ env = (BVar b, v) : env st}
+
+tt = while t tbody
+
+tbody = \(Node [Leaf e, Leaf f]) -> (e `lt32` int32 42, Node [Leaf $ add32 (int32 1) e, Leaf $ add32 f e])
+
+add32 x y = EOp (Op Add tsint32) [x,y]
+lt32 x y = EOp (Op Lt tbool) [x,y]
+
+tsint32 = TSInt 32
+int32 x = EAExp $ CAExp $ Int tsint32 x
+
+t = while (Node [Leaf $ int32 0, Leaf $ int32 4]) tbody
+
+ttt = while (Leaf $ int32 0) $ \(Leaf e) -> (e `lt32` int32 42, Leaf $ add32 (int32 1) e)
+
+eval :: Exp -> Eval Rational
+eval = \case
+  EAExp a -> case a of
+    CAExp b -> case b of
+      Int _ i -> return $ toRational i
+      Rat _ r -> return r
+      Undef _ -> error "eval:undef"
+    VAExp b -> gets env >>= return . fromJust . lookup b
+  EOp a bs -> let f = fromJust (lookup (uop a) optbl) in mapM eval bs >>= return . f
+  ESwitch a bs c -> do
+    i <- eval a >>= return . round
+    eval $ if i < length bs then (bs !! i) else c
+  EWhile _ a t c -> do
+    mapM_ (\(b, (e,_)) -> evalBound b e) t
+    let go = do
+          r <- eval a >>= return . toEnum . round
+          if r
+             then do
+               mapM_ (\(b, (_,e)) -> evalBound b e) t
+               go
+             else eval $ bvar c
+    go
+
+runEval = flip runState (St []) . eval
+
 maximumBV :: (Foldable t, Functor t) => t Exp -> Integer
 maximumBV = maximum . fmap maxBV
 
 maxBV :: Exp -> Integer
-maxBV x = case x of
-  EAExp a -> 0
-  -- EAExp a -> case a of
-  --   VAExp (BVar v) -> bid v
-  --   _ -> 0
+maxBV = \case
+  EAExp _ -> 0 -- not a typo, see http://pchiusano.github.io/2014-06-20/simple-debruijn-alternative.html
+               -- or http://www.cse.chalmers.se/~emax/documents/axelsson2013using.pdf
   EOp _ bs -> maximumBV bs
   ESwitch a bs c -> maximumBV (a : c : bs)
   EWhile n _ _ _ -> n
@@ -393,18 +459,6 @@ while x f = fmap (EWhile (n+m) e $ zipTree xb $ zipTree x x1) xb
     x0 :: Tree Exp = fmap bvar xb
     xb :: Tree Bound =
       snd $ mapAccumR (\(b:bs) j -> (bs, Bound (typeof j) Nothing b)) [n..] x
-
-tt = while t tbody
-
-tbody = \(Node [Leaf e, Leaf f]) -> (e `lt32` int32 42, Node [Leaf $ add32 (int32 1) e, Leaf $ add32 f e])
-  where
-    add32 x y = EOp (Op Add tsint32) [x,y]
-    lt32 x y = EOp (Op Lt tbool) [x,y]
-
-tsint32 = TSInt 32
-int32 x = EAExp $ CAExp $ Int tsint32 x
-
-t = while (Node [Leaf $ int32 0, Leaf $ int32 4]) tbody
     
 -- while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
 -- while xs f = fmap (\(v, _) -> EPhi v w) t
@@ -431,7 +485,7 @@ t = while (Node [Leaf $ int32 0, Leaf $ int32 4]) tbody
 tbool = TUInt 1
 
 -- instance Typed Exp where
---   typeof x = case x of
+--   typeof = \case
 --     EAExp a -> typeof a
 --     EOp _ a bs -> typeofOp a bs
 --     ESwitch{} -> TAggregate
@@ -529,7 +583,7 @@ tbool = TUInt 1
 -- computes = mapM compute
   
 -- compute :: AExp -> N AExp
--- compute x = case x of
+-- compute = \case
 --   UVar a -> do
 --     modify $ \st -> st{ uvars = S.insert a $ uvars st }
 --     return x
@@ -552,7 +606,7 @@ tbool = TUInt 1
 --   _ -> return x
 
 -- computeStmt :: AExp -> N ()
--- computeStmt x = case x of
+-- computeStmt = \case
 --   FVar n -> do
 --     my <- lookupFree n
 --     case my of
@@ -628,7 +682,7 @@ tbool = TUInt 1
 -- -}
 
 -- fromCExp :: CExp -> Exp
--- fromCExp x = case x of
+-- fromCExp = \case
 --   CAExp a -> EAExp a
 --   COp a bs -> EOp 0 a $ map EAExp bs
 --   CSwitch vs a bss cs ->
@@ -675,7 +729,7 @@ tbool = TUInt 1
 --   Int _ a -> a == y
 --   _ -> False
 
--- isConst x = case x of
+-- isConst = \case
 --   Int{} -> True
 --   Rat{} -> True
 --   _ -> False
@@ -758,7 +812,7 @@ tbool = TUInt 1
 --       rToR f x = Rat t . f x
 
 -- toAExp :: CExp -> M AExp
--- toAExp x = case x of
+-- toAExp = \case
 --   CAExp a -> return a
 --   COp a [b, c] | isConst b && isConst c -> return $ constFold a [b, c]
 --   COp Add [b, c] | b `eqConst` 0 -> return c
@@ -787,7 +841,7 @@ tbool = TUInt 1
 --       modify $ \_ -> tbl'
 --       return $ FVar $ Free (typeof x) a
 
--- canonCExp x = case x of
+-- canonCExp = \case
 --   COp a [b, c] | b > c -> case a of
 --     Add -> f Add
 --     Mul -> f Mul
@@ -821,7 +875,7 @@ tbool = TUInt 1
 --     where a = next tbl
     
 -- cexp :: Exp -> M CExp
--- cexp x = case x of
+-- cexp = \case
 --   EAExp a -> return $ CAExp a
 --   EOp _ b cs -> COp b <$> mapM aexp cs
 --   ESwitch _ vs b cs d -> do
@@ -842,12 +896,12 @@ tbool = TUInt 1
 
 -- ppSwitch a bs c = hsep $ text "switch" : pp a : map pp bs ++ [pp c]
 
--- ppParens x = case x of
+-- ppParens = \case
 --   EAExp{} -> pp x
 --   _ -> parens $ pp x
 
 -- instance PP Exp where
---   pp x = case x of
+--   pp = \case
 --     ESwitch _ _ a bs c -> ppSwitch a bs c
 --     EOp _ a bs
 --       | a == ExtractElement -> pp b0 <> brackets (pp b1)
@@ -872,7 +926,7 @@ tbool = TUInt 1
 -- maximumBV = maximum . map maxBV
 
 -- maxBV :: Exp -> Integer
--- maxBV x = case x of
+-- maxBV = \case
 --   ESwitch i _ _ _ _ -> i
 --   EOp i _ _ -> i
 --   EAExp _ -> 0
@@ -920,7 +974,7 @@ unused = error . (++) "unused:"
 --   deriving Show
 
 -- instance PP Terminator where
---   pp x = case x of
+--   pp = \case
 --     Jump a -> text "jump" <+> pp a
 --     Switch a bs c -> ppSwitch a bs c
 --     Return a -> text "return" <+> pp a
@@ -974,7 +1028,7 @@ unused = error . (++) "unused:"
 --       , bvars = array (0, pred nbv) $ zip [0 .. pred nbv] $ repeat Nothing
 --       }
 
--- depsAExp x = case x of
+-- depsAExp = \case
 --   FVar a -> Just $ fid a
 --   _ -> Nothing
 

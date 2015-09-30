@@ -1,8 +1,18 @@
+UNAME := $(shell uname)
+
 CC = clang -O3 -lm
+
+EXE =
+ifeq ($(UNAME), Linux)
+	EXE = ~/.local/bin/shootout-exe
+else
+	EXE = ~/AppData/Roaming/local/bin/shootout-exe.exe
+endif
 
 all :
 	stack install
-	~/.local/bin/shootout-exe
+	$(EXE)
+
 # all : a.exe nbody.exe fannkuch.exe spectral.exe
 # 	ls -al $^
 # 	# ./a.exe 2000
@@ -11,6 +21,7 @@ all :
 # 	# ./nbody.exe 1
 # 	./a.exe 2
 # 	./spectral.exe 2
+
 
 t.ll : Main.hs Shoot.hs Untyped.hs
 	stack install
