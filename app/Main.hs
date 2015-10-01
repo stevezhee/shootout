@@ -20,9 +20,9 @@ import Untyped
 
 main :: IO ()
 main = do
-  print tt
+  -- print tt
   let Leaf a = ttt
-  print $ runEval a
+  print $ pp $ runEval a
   
 -- main = compile $
 --   spctMain C1

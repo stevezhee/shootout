@@ -46,7 +46,7 @@ import           Data.Maybe
 -- import qualified Data.Set as S
 import Data.Foldable
 -- import Data.Bits
--- import Data.Graph hiding (Tree, Node)
+import Data.Graph hiding (Tree, Node)
 -- import Data.GraphViz hiding (Int)
 -- import System.Process
 -- import qualified Data.Text.Lazy.IO as T
@@ -220,8 +220,8 @@ instance Functor Tree where
 
 
 -- instance PP a => PP [a] where pp = parens . hsep . map pp
-  
--- instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
+
+instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
 -- isBinop = flip elem [Add, Mul, Sub, Quot, Rem, And, Or, Xor, Shl, Lshr, Ashr, Eq, Ne, Gt, Lt, Gte, Lte]
 -- type NumBV = Integer
 
@@ -229,7 +229,7 @@ class Typed a where typeof :: a -> Type
 class PP a where pp :: a -> Doc
 
 data Type
-  = TSInt Integer | TUInt Integer | TDouble | TAggregate | TVector Integer Type
+  = TSInt Integer | TUInt Integer | TFloating Integer | TAggregate | TVector Integer Type
   deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
 
@@ -249,7 +249,13 @@ instance Typed Const where
     Int a _ -> a
     Rat a _ -> a
     Undef a -> a
-    
+
+instance Typed Float where typeof _ = TFloating 32
+instance Typed Double where typeof _ = TFloating 64
+instance Typed Int where typeof _ = TSInt 32
+instance Typed Bool where typeof _ = TUInt 1 -- BAL: make general for enums
+instance Typed Word where typeof _ = TUInt 32
+
 instance PP Integer where pp = integer
 instance PP Rational where pp = rational
                           
@@ -343,7 +349,7 @@ data Exp
   = EAExp AExp
   | EOp Op [Exp]
   | ESwitch Exp [Exp] Exp
-  | EWhile Integer Exp (Tree (Bound, (Exp, Exp))) Bound
+  | EWhile Integer Exp [(Bound, (Exp, Exp))] Bound
   deriving (Show, Eq)
 
 instance Typed Exp where
@@ -376,6 +382,8 @@ optbl =
   []
 
 data St = St{ env :: [(Var, Rational)] } deriving Show
+
+instance PP St where pp = vcat . map pp . env
 
 type Eval a = State St a
 
@@ -451,13 +459,13 @@ bvar :: Bound -> Exp
 bvar = EAExp . VAExp . BVar
 
 while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
-while x f = fmap (EWhile (n+m) e $ zipTree xb $ zipTree x x1) xb
+while x f = fmap (EWhile (n+m) e $ toList $ zipTree xb $ zipTree x x1) xb
   where
     m = fromIntegral $ length x
     n = maximum [maximumBV x, maxBV e, maximumBV x1]
     (e, x1) = f x0
-    x0 :: Tree Exp = fmap bvar xb
-    xb :: Tree Bound =
+    x0 = fmap bvar xb
+    xb =
       snd $ mapAccumR (\(b:bs) j -> (bs, Bound (typeof j) Nothing b)) [n..] x
     
 -- while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp

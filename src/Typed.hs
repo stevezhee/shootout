@@ -4,12 +4,30 @@
 module Typed where
 
 import qualified Untyped as U
--- import Untyped (unused, Op(..), Type(..), Typed(..), Tree(..), Exp(..))
+import Untyped (unused, Op(..), Type(..), Typed(..), Tree(..), Exp(..))
 -- import Prelude
 -- import Data.Word
 -- import Data.List
 
--- data E a = E{ unE :: U.Exp }
+class Typed a => Cmp a
+
+instance Cmp (E Float)
+instance Cmp (E Double)
+instance Cmp (E Int)
+instance Cmp (E Word)
+instance (Count c, Cmp a) => Cmp (V c a)
+instance Typed a => Typed (E a) where
+  typeof (_ :: E a) = typeof (unused "Typed (E a)" :: a)
+  
+instance (Count c, Typed a) => Typed (V c a) where
+  typeof (_ :: V c a) =
+    TVector (icountof (unused "Typed (V c a):c" :: c))
+            (typeof (unused "Typed (V c a):a" :: a))
+
+eq :: Cmp a => a -> a -> E Bool
+eq = undefined
+
+data E a = E{ unE :: U.Exp }
 
 -- instance EType Word where etypeof _ = TUInt 32
 -- instance EType Word64 where etypeof _ = TUInt 64
@@ -21,7 +39,16 @@ import qualified Untyped as U
 
 -- instance EType a => Typed (E a) where typeof (_ :: E a) = etypeof (unused "etypeof:E a" :: a)
 
--- class Count c where ecountof :: c -> Integer
+class Count c where icountof :: c -> Integer
+
+countof :: Count c => c -> E Word
+countof = fromInteger . icountof
+
+instance Num a => Num (E a)
+instance Enum a => Enum (E a)
+instance Real a => Real (E a)
+instance Ord a => Ord (E a)
+instance Eq a => Eq (E a)
 
 -- instance (Count c, EType a) => EType (V c a) where
 --   etypeof (_ :: V c a) =
@@ -33,7 +60,7 @@ import qualified Untyped as U
 -- instance (Count c) => Counted (E (V c a)) where
 --   countof (_ :: E (V c a)) = fromIntegral $ ecountof (unused "countof:E (V c a)" :: c)
   
--- data V c a
+data V c a
 
 -- assert s b a = if b then a else error $ "assert:" ++ s
 
@@ -174,6 +201,11 @@ import qualified Untyped as U
 -- eif :: (EType a) => E Bool -> E a -> E a -> E a
 -- eif x y z = switch x [z] y
 
+  
+-- instance (EType a, Fractional a) => Fractional (E a) where
+--   fromRational x = let v = E $ U.EAExp $ U.Rat (typeof v) x in v
+--   (/) = binop Quot
+
 -- instance (EType a, Num a) => Num (E a) where
 --   fromInteger x = let v = E $ U.EAExp $ U.Int (typeof v) x in v
 --   (*) = binop Mul
@@ -181,7 +213,6 @@ import qualified Untyped as U
 --   (-) = binop Sub
 --   abs = unop Abs
 --   signum = unop Signum
-  
 -- -- instance (EType a, Integral a) => Integral (E a) where
 -- --   quotRem x y = (binop Quot x y, binop Rem x y) -- BAL: do these match llvm div, rem?
 -- --   toInteger = error "toInteger"
@@ -215,10 +246,6 @@ import qualified Untyped as U
 
 -- unop :: Op -> E a -> E b
 -- unop o (E x) = E $ U.unop o x
-
--- instance (EType a, Fractional a) => Fractional (E a) where
---   fromRational x = let v = E $ U.EAExp $ U.Rat (typeof v) x in v
---   (/) = binop Quot
 
 -- instance (EType a, Floating a) => Floating (E a) where
 --   pi = 3.141592653589793 -- BAL: use prelude value of pi?
