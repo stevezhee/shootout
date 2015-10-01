@@ -1,10 +1,13 @@
-{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE RebindableSyntax #-}
+
 module Main where
 
-import Prelude hiding (max)
+import Prelude hiding (Num(..))
 import Typed
-import Untyped
+-- import Untyped
 -- import Data.Word
 
 -- data C16 = C16
@@ -18,11 +21,16 @@ import Untyped
 -- data C5500 = C5500
 -- instance Count C5500 where ecountof _ = 5500
 
+foo x = do
+  print $ pp x
+  print $ pp $ runEval x
+  
 main :: IO ()
 main = do
   -- print tt
-  let Leaf a = ttt
-  print $ pp $ runEval a
+  foo $ fastpow 2 (3 :: E Int)
+  foo $ fastpow (3 :: E Int) 2
+  foo $ dbl (dbl (2 :: E Double))
   
 -- main = compile $
 --   spctMain C1

@@ -19,12 +19,12 @@ import qualified Text.PrettyPrint as PP
 import           Text.PrettyPrint hiding (int, empty)
 import Data.Traversable
 
--- import Debug.Trace
+import Debug.Trace
 -- import           Control.Applicative hiding (empty)
 -- import           Control.Exception
 import Control.Monad.State hiding (mapM, sequence)
 -- import qualified Data.HashMap.Strict as M
--- import  Data.List
+import  Data.List (sort)
 --   hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr, concat)
 import           Data.Maybe
 -- import  Prelude
@@ -50,6 +50,7 @@ import Data.Graph hiding (Tree, Node)
 -- import Data.GraphViz hiding (Int)
 -- import System.Process
 -- import qualified Data.Text.Lazy.IO as T
+import Data.Ratio
 
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
 
@@ -144,7 +145,7 @@ instance Functor Tree where
 --   Shl -> intop (wrap A.Shl)
 --   Lshr -> intop (notExact A.LShr)
 --   Ashr -> intop (notExact A.AShr)
---   Quot -> ubinary (exct A.UDiv) (exct A.SDiv) (fast A.FDiv)
+--   Div -> ubinary (exct A.UDiv) (exct A.SDiv) (fast A.FDiv)
 --   Rem -> ubinary A.URem A.SRem (fast A.FRem)
 --   Eq -> cmp IP.EQ FP.OEQ
 --   Ne -> cmp IP.NE FP.ONE
@@ -219,10 +220,10 @@ instance Functor Tree where
 --   BasicBlock (llvmName a) (map llvmPhi bs ++ map llvmInsn cs) (llvmTerminator d)
 
 
--- instance PP a => PP [a] where pp = parens . hsep . map pp
+instance PP a => PP [a] where pp = vcat . map pp
 
 instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
--- isBinop = flip elem [Add, Mul, Sub, Quot, Rem, And, Or, Xor, Shl, Lshr, Ashr, Eq, Ne, Gt, Lt, Gte, Lte]
+isBinop = flip elem [Add, Mul, Sub, Div, Rem, And, Or, Xor, Shl, Lshr, Ashr, Eq, Ne, Gt, Lt, Gte, Lte] . uop
 -- type NumBV = Integer
 
 class Typed a where typeof :: a -> Type
@@ -233,20 +234,19 @@ data Type
   deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
 
+instance PP Double where pp = double
+                         
 data Const
-  = Int Type Integer
-  | Rat Type Rational
+  = Rat Type Rational
   | Undef Type
   deriving (Show, Eq, Generic, Ord)
 instance Hashable Const
 instance PP Const where
   pp = \case
-    Int _ b -> pp b
     Rat _ b -> pp b
     Undef _ -> text "undef"
 instance Typed Const where
   typeof = \case
-    Int a _ -> a
     Rat a _ -> a
     Undef a -> a
 
@@ -257,8 +257,10 @@ instance Typed Bool where typeof _ = TUInt 1 -- BAL: make general for enums
 instance Typed Word where typeof _ = TUInt 32
 
 instance PP Integer where pp = integer
-instance PP Rational where pp = rational
-                          
+instance PP Rational where
+  pp x | denominator x == 1 = pp (numerator x)
+       | otherwise = pp (fromRational x :: Double)
+
 newtype Label = Label{ lid :: Integer } deriving (Show, Eq, Num, Ord, Generic, Enum)
 instance Hashable Label
 instance PP Label where pp x = text "L" <> pp (lid x)
@@ -313,7 +315,7 @@ instance Typed AExp where
     VAExp a -> typeof a
 
 data UOp
-  = Add | Mul | Sub | Quot | Rem | And | Or | Xor | Shl | Lshr | Ashr | Eq | Ne | Gt | Lt | Gte | Lte
+  = Add | Mul | Sub | Div | Rem | And | Or | Xor | Shl | Lshr | Ashr | Eq | Ne | Gt | Lt | Gte | Lte
   | Abs | Signum | Sqrt | Exp | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh | Acosh
   | InsertElement | ExtractElement | ShuffleVector
   | ToFP
@@ -324,7 +326,7 @@ instance PP UOp where
     Add -> "+"
     Mul -> "*"
     Sub -> "-"
-    Quot -> "/"
+    Div -> "/"
     Rem -> "%"
     And -> "&"
     Or -> "|"
@@ -350,7 +352,7 @@ data Exp
   | EOp Op [Exp]
   | ESwitch Exp [Exp] Exp
   | EWhile Integer Exp [(Bound, (Exp, Exp))] Bound
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 instance Typed Exp where
   typeof = \case
@@ -364,15 +366,32 @@ binop f = \case
   [a,b] -> f a b
   _ -> error "binop"
 
-cmpop :: (Rational -> Rational -> Bool) -> [Rational] -> Rational
-cmpop f = binop $ \a b -> toRational $ fromEnum $ f a b
+debug x = trace ("debug:" ++ show x) x
 
-optbl :: [(UOp, [Rational] -> Rational)]
-optbl =
+binopi :: (Integer -> Integer -> Integer) -> [Rational] -> Rational
+binopi f = \case
+  [a,b] -> toRational $ f (numerator a) (numerator b)
+  _ -> error "binop"
+
+binop2 :: Type -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> [Rational] -> Rational
+binop2 t f g = case t of
+  TFloating{} -> binop f
+  _ -> binopi g
+
+cmpop :: (Rational -> Rational -> Bool) -> [Rational] -> Rational
+cmpop f = \case
+  [a,b] -> toRational $ fromEnum $ f a b
+  _ -> error "cmpop"
+
+frem = unused "frem"
+
+optbl :: Type -> [(UOp, [Rational] -> Rational)]
+optbl t =
   (Add, binop (+)) :
   (Sub, binop (-)) :
   (Mul, binop (*)) :
-  (Quot, binop (/)) :
+  (Div, binop2 t (/) div) :
+  (Rem, binop2 t frem rem) :
   (Eq, cmpop (==)) :
   (Ne, cmpop (/=)) :
   (Lt, cmpop (<)) :
@@ -387,7 +406,7 @@ instance PP St where pp = vcat . map pp . env
 
 type Eval a = State St a
 
-evalBound b e = eval e >>= \v -> modify $ \st -> st{ env = (BVar b, v) : env st}
+evalBound b e = eval e >>= \v -> modify $ \st -> st{ env = [(BVar b, v)] ++ env st }
 
 tt = while t tbody
 
@@ -397,7 +416,7 @@ add32 x y = EOp (Op Add tsint32) [x,y]
 lt32 x y = EOp (Op Lt tbool) [x,y]
 
 tsint32 = TSInt 32
-int32 x = EAExp $ CAExp $ Int tsint32 x
+int32 x = EAExp $ CAExp $ Rat tsint32 x
 
 t = while (Node [Leaf $ int32 0, Leaf $ int32 4]) tbody
 
@@ -407,18 +426,17 @@ eval :: Exp -> Eval Rational
 eval = \case
   EAExp a -> case a of
     CAExp b -> case b of
-      Int _ i -> return $ toRational i
       Rat _ r -> return r
       Undef _ -> error "eval:undef"
-    VAExp b -> gets env >>= return . fromJust . lookup b
-  EOp a bs -> let f = fromJust (lookup (uop a) optbl) in mapM eval bs >>= return . f
+    VAExp b -> gets env >>= return . fromMaybe (unused "eval:VAExp") . lookup b
+  EOp a bs -> let f = fromMaybe (unused "eval:EOp") (lookup (uop a) $ optbl $ otype a) in mapM eval bs >>= return . f
   ESwitch a bs c -> do
-    i <- eval a >>= return . round
+    i <- eval a >>= return . fromInteger . numerator
     eval $ if i < length bs then (bs !! i) else c
   EWhile _ a t c -> do
     mapM_ (\(b, (e,_)) -> evalBound b e) t
     let go = do
-          r <- eval a >>= return . toEnum . round
+          r <- eval a >>= return . toEnum . fromInteger . numerator
           if r
              then do
                mapM_ (\(b, (_,e)) -> evalBound b e) t
@@ -426,7 +444,8 @@ eval = \case
              else eval $ bvar c
     go
 
-runEval = flip runState (St []) . eval
+runEval :: Exp -> (Rational, St)
+runEval x = flip runState (St []) $ eval x
 
 maximumBV :: (Foldable t, Functor t) => t Exp -> Integer
 maximumBV = maximum . fmap maxBV
@@ -459,7 +478,7 @@ bvar :: Bound -> Exp
 bvar = EAExp . VAExp . BVar
 
 while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
-while x f = fmap (EWhile (n+m) e $ toList $ zipTree xb $ zipTree x x1) xb
+while x f = fmap (EWhile (n+m) e $ sort $ toList $ zipTree xb $ zipTree x x1) xb
   where
     m = fromIntegral $ length x
     n = maximum [maximumBV x, maxBV e, maximumBV x1]
@@ -712,7 +731,7 @@ tbool = TUInt 1
 -- --   Add -> a + b
 -- --   Sub -> a - b
 -- --   Mul -> a * b
--- --   Quot -> a / b
+-- --   Div -> a / b
 -- --   Sqrt -> toRational (sqrt (fromRational a) :: Double)
 -- --   _ -> error $ "evalOpRat:" ++ show (x,ys)
 -- --   where
@@ -724,7 +743,7 @@ tbool = TUInt 1
 -- --   Add -> a + b
 -- --   Sub -> a - b
 -- --   Mul -> a * b
--- --   Quot -> a `div` b
+-- --   Div -> a `div` b
 -- --   _ -> error $ "evalOpInt:" ++ show (x,ys)
 -- --   where
 -- --     [a,b] = ys
@@ -784,7 +803,7 @@ tbool = TUInt 1
 --     Add -> iToI (+)
 --     Mul -> iToI (*)
 --     Sub -> iToI (-)
---     Quot -> iToI quot
+--     Div -> iToI quot
 --     Rem -> iToI rem
 --     Eq -> toB (==)
 --     Ne -> toB (/=)
@@ -808,7 +827,7 @@ tbool = TUInt 1
 --     Add -> rToR (+)
 --     Mul -> rToR (*)
 --     Sub -> rToR (-)
---     Quot -> rToR (/)
+--     Div -> rToR (/)
 --     Rem -> unused "Rem" -- BAL:?
 --     Eq -> toB (==)
 --     Ne -> toB (/=)
@@ -830,9 +849,9 @@ tbool = TUInt 1
 --   COp Mul [b, c] | b `eqConst` 0 || c `eqConst` 0 -> return zero
 --   COp Mul [b, c] | b `eqConst` 1 -> return c
 --   COp Mul [b, c] | c `eqConst` 1 -> return b
---   COp Quot [b, c] | c `eqConst` 0 -> error "divide by zero"
---   COp Quot [b, c] | c `eqConst` 1 -> return b
---   COp Quot [b, c] | b == c -> return one
+--   COp Div [b, c] | c `eqConst` 0 -> error "divide by zero"
+--   COp Div [b, c] | c `eqConst` 1 -> return b
+--   COp Div [b, c] | b == c -> return one
 --   COp Rem [b, c] | c `eqConst` 0 -> error "remainder by zero"
 --   COp Rem [b, c] | c `eqConst` 1 || b == c -> return zero
 --   COp a [b, c] | a `elem` [Eq, Gte, Lte] && b == c -> return true
@@ -902,27 +921,29 @@ tbool = TUInt 1
 
 -- instance PP [Block] where pp = vcat . map pp
 
--- ppSwitch a bs c = hsep $ text "switch" : pp a : map pp bs ++ [pp c]
+ppSwitch a bs c = vcat [text "switch" <+> ppParens a, nest 2 $ pp $ bs ++ [c]]
 
--- ppParens = \case
---   EAExp{} -> pp x
---   _ -> parens $ pp x
+ppParens x = case x of
+  EAExp{} -> pp x
+  _ -> parens $ pp x
 
--- instance PP Exp where
---   pp = \case
---     ESwitch _ _ a bs c -> ppSwitch a bs c
---     EOp _ a bs
---       | a == ExtractElement -> pp b0 <> brackets (pp b1)
---       | a == InsertElement -> pp b0 <> brackets (pp b2) <+> text "<-" <+> pp b1
---       | isBinop a -> ppParens b0 <+> pp a <+> ppParens b1
---       | otherwise -> pp a <+> hsep (map ppParens bs)
---       where
---         b0:_ = bs
---         _:b1:_ = bs
---         _:_:b2:_ = bs
---     EAExp a -> pp a
---     EWhile _ a bs -> vcat [text "while", nest 2 $ vcat [ppParens a, pp bs]]
---     EPhi a b -> hsep [text "phi", pp a, ppParens b]
+ppStore x y = pp x <+> text ":=" <+> pp y
+
+instance PP Exp where
+  pp = \case
+    ESwitch a bs c -> ppSwitch a bs c
+    EOp a bs
+    --   | a == ExtractElement -> pp b0 <> brackets (pp b1)
+    --   | a == InsertElement -> pp b0 <> brackets (pp b2) <+> text "<-" <+> pp b1
+      | isBinop a -> ppParens b0 <+> pp a <+> ppParens b1
+      | otherwise -> pp a <+> hsep (map ppParens bs)
+      where
+        b0:_ = bs
+        _:b1:_ = bs
+        _:_:b2:_ = bs
+    EAExp a -> pp a
+    EWhile _ a bs c -> vcat [pp c <+> text "from", nest 2 $ vcat [ vcat $ map (\(p, (q, _)) -> ppStore p q) bs, text "while" <+> ppParens a, nest 2 $ vcat $ map (\(p, (_, r)) -> ppStore p r) bs] ]
+    -- EPhi a b -> hsep [text "phi", pp a, ppParens b]
 
 -- instance (Foldable t, PP a) => PP (t a) where pp = pp . toList
 

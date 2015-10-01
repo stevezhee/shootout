@@ -1,132 +1,218 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE EmptyDataDecls #-}
-module Typed where
+{-# LANGUAGE RebindableSyntax #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleContexts #-}
+
+module Typed
+  ( module Typed,
+    PP(..),
+    St(..)
+  )
+where
 
 import qualified Untyped as U
-import Untyped (unused, Op(..), Type(..), Typed(..), Tree(..), Exp(..))
--- import Prelude
+import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Const(..), AExp(..), PP(..), St(..))
+import qualified Prelude as P
 -- import Data.Word
 -- import Data.List
+import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($))
 
-class Typed a => Cmp a
+instance PP (E a) where pp = pp . unE
+  
+fastpow :: (Typed a, Arith a) => E a -> E a -> E a
+fastpow b e =
+  snd $ while ((b, e), 1) $ \((b, e), r) ->
+    (e > 0, ((b * b, e / 2), if' ((e % 2) /= 0) (r * b) r))
 
-instance Cmp (E Float)
-instance Cmp (E Double)
-instance Cmp (E Int)
-instance Cmp (E Word)
-instance (Count c, Cmp a) => Cmp (V c a)
+class Boolean bool where
+--  ifThenElse :: bool -> a -> a -> a
+  
+class (Typed a, Boolean b) => Cmp a b | a -> b where
+  (==) :: a -> a -> b
+  (/=) :: a -> a -> b
+  (>) :: a -> a -> b
+  (<) :: a -> a -> b
+  (>=) :: a -> a -> b
+  (<=) :: a -> a -> b
+
+instance Boolean (E Bool) where
+  -- ifThenElse 
+
+if' a b c = agg $ U.switch (unE a) [unAgg c] (unAgg b)
+
+instance Boolean Bool where
+--   ifThenElse = P.ifThenElse
+
+instance Typed a => Cmp (E a) (E Bool) where
+  (==) = binop Eq
+  (/=) = binop Ne
+  (>) = binop Gt
+  (<) = binop Lt
+  (>=) = binop Gte
+  (<=) = binop Lte
+  
+class Arith a where
+  (*) :: a -> a -> a
+  (+) :: a -> a -> a
+  (-) :: a -> a -> a
+  (/) :: a -> a -> a
+  (%) :: a -> a -> a
+  fromInteger :: Integer -> a
+  abs :: a -> a
+
+instance Floating Double
+instance Floating Float
+instance Arith Double
+instance Arith Float
+instance Arith Word
+
+instance Arith Int where
+  fromInteger = P.fromInteger
+  (+) = (P.+)
+  
+class Typed a => Floating a where
+  fromRational :: Rational -> a
+  pi :: a
+  pi = 3.141592653589793 -- BAL: use prelude value of pi?
+  sqrt :: a -> a
+  exp :: a -> a
+  log :: a -> a
+  sin :: a -> a
+  cos :: a -> a
+  asin :: a -> a
+  atan :: a -> a
+  acos :: a -> a
+  sinh :: a -> a
+  cosh :: a -> a
+  asinh :: a -> a
+  atanh :: a -> a
+  acosh :: a -> a
+
+instance Floating a => Floating (E a) where
+  fromRational x = let v = E $ EAExp $ CAExp $ Rat (typeof v) x in v
+  acosh = unop Acosh
+  atanh = unop Atanh
+  asinh = unop Asinh
+  sqrt = unop Sqrt
+  exp = unop Exp
+  log = unop Log
+  sin = unop Sin
+  cos = unop Cos
+  asin = unop Asin
+  atan = unop Atan
+  acos = unop Acos
+  sinh = unop Sinh
+  cosh = unop Cosh
+
+instance (Typed a, Arith a) => Arith (E a) where
+  (*) = binop Mul
+  (+) = binop Add
+  (-) = binop Sub
+  (/) = binop Div
+  (%) = binop Rem
+  abs = unop Abs
+  fromInteger x = let v = E $ EAExp $ CAExp $ Rat (typeof v) (P.toRational x) in v
+
+instance Cmp Float Bool
+instance Cmp Double Bool
+instance Cmp Int Bool
+instance Cmp Word Bool
+instance (Count c, Cmp a Bool) => Cmp (V c a) Bool
+
 instance Typed a => Typed (E a) where
   typeof (_ :: E a) = typeof (unused "Typed (E a)" :: a)
   
 instance (Count c, Typed a) => Typed (V c a) where
   typeof (_ :: V c a) =
-    TVector (icountof (unused "Typed (V c a):c" :: c))
+    TVector (countof (unused "Typed (V c a):c" :: c))
             (typeof (unused "Typed (V c a):a" :: a))
 
-eq :: Cmp a => a -> a -> E Bool
-eq = undefined
+data E a = E{ unE :: Exp }
+  
+data V c a
 
-data E a = E{ unE :: U.Exp }
+-- class Typed a where etypeof :: a -> Type
 
--- instance EType Word where etypeof _ = TUInt 32
--- instance EType Word64 where etypeof _ = TUInt 64
--- instance EType Int where etypeof _ = TSInt 32
--- instance EType Double where etypeof _ = TDouble
--- instance EType Bool where etypeof _ = TUInt 1
+-- instance Typed a => Typed (E a) where typeof (_ :: E a) = etypeof (unused "etypeof:E a" :: a)
 
--- class EType a where etypeof :: a -> Type
+class Count c where countof :: c -> Integer
 
--- instance EType a => Typed (E a) where typeof (_ :: E a) = etypeof (unused "etypeof:E a" :: a)
-
-class Count c where icountof :: c -> Integer
-
-countof :: Count c => c -> E Word
-countof = fromInteger . icountof
-
-instance Num a => Num (E a)
-instance Enum a => Enum (E a)
-instance Real a => Real (E a)
-instance Ord a => Ord (E a)
-instance Eq a => Eq (E a)
-
--- instance (Count c, EType a) => EType (V c a) where
---   etypeof (_ :: V c a) =
---     TVector (ecountof (unused "countof:V c a" :: c))
---       (etypeof (unused "typeof:V c a" :: a))
+count :: Count c => c -> E Word
+count = fromInteger . countof
 
 -- class Counted a where countof :: a -> E Word
 
 -- instance (Count c) => Counted (E (V c a)) where
 --   countof (_ :: E (V c a)) = fromIntegral $ ecountof (unused "countof:E (V c a)" :: c)
-  
-data V c a
 
 -- assert s b a = if b then a else error $ "assert:" ++ s
 
--- tofp :: (EType a, EType b, Integral a, Floating b) => E a -> E b
+-- tofp :: (Typed a, Typed b, Integral a, Floating b) => E a -> E b
 -- tofp x = let b = unop (U.ToFP $ typeof b) x in b
 
--- undef :: (EType a) => E a
+-- undef :: (Typed a) => E a
 -- undef = let a = E $ U.EAExp $ U.Undef $ typeof a in a
 
--- vec :: (Count c, EType a) => [E a] -> E (V c a)
+-- vec :: (Count c, Typed a) => [E a] -> E (V c a)
 -- vec (xs :: [E a]) = f (unused "vec")
 --   where
---     f :: (Count c, EType a) => c -> E (V c a)
+--     f :: (Count c, Typed a) => c -> E (V c a)
 --     f c = assert "vec:length mismatch" (not (null bs) && length bs == cnt) $
 --           foldl' ins undef $ zip bs [0 .. ]
 --       where
 --       cnt = fromIntegral $ ecountof c
 --       bs = take cnt xs
 
--- ex :: (Count c, EType a) => E (V c a) -> E Word -> E a
+-- ex :: (Count c, Typed a) => E (V c a) -> E Word -> E a
 -- ex = binop U.ExtractElement
 
--- ins :: (Count c, EType a) => E (V c a) -> (E a, E Word) -> E (V c a)
+-- ins :: (Count c, Typed a) => E (V c a) -> (E a, E Word) -> E (V c a)
 -- ins x (y, z) = ternop U.InsertElement x y z
 
--- vupd :: (Count c, EType a) => E (V c a) -> (E a -> E a, E Word) -> E (V c a)
+-- vupd :: (Count c, Typed a) => E (V c a) -> (E a -> E a, E Word) -> E (V c a)
 -- vupd x (f, z) = vupdi x (\_ -> f, z)
 
--- vupdi :: (Count c, EType a) => E (V c a) ->
+-- vupdi :: (Count c, Typed a) => E (V c a) ->
 --   (E Word -> E a -> E a, E Word) -> E (V c a)
 -- vupdi x (f, z) = ins x (f z $ ex x z, z)
 
--- vmap :: (Count c, EType a) => (E a -> E a) -> E (V c a) -> E (V c a)
+-- vmap :: (Count c, Typed a) => (E a -> E a) -> E (V c a) -> E (V c a)
 -- vmap f = vmapi $ \_ -> f
 
--- vmapi :: (Count c, EType a) => (E Word -> E a -> E a) -> E (V c a) -> E (V c a)
+-- vmapi :: (Count c, Typed a) => (E Word -> E a -> E a) -> E (V c a) -> E (V c a)
 -- vmapi f xs = snd $ while (0, xs) $ \(i, xs) ->
 --   ( i `lt` countof xs
 --   , (i + 1, vupdi xs (f, i))
 --   )
 
--- vfold :: (Count c, EType a, Aggregate b) => (b -> E a -> b) -> b -> E (V c a) -> b
+-- vfold :: (Count c, Typed a, Agg b) => (b -> E a -> b) -> b -> E (V c a) -> b
 -- vfold f = vfoldi $ \_ -> f
 
--- vrepeat :: (Count c, EType a) => E a -> E (V c a)
+-- vrepeat :: (Count c, Typed a) => E a -> E (V c a)
 -- vrepeat = vunfoldi_ . const
 
--- vunfoldi_ :: (Count c, EType a) => (E Word -> E a) -> E (V c a)
+-- vunfoldi_ :: (Count c, Typed a) => (E Word -> E a) -> E (V c a)
 -- vunfoldi_ f = vunfoldi (\i _ -> (f i, b)) b
 --   where b :: E Word = undef -- BAL: b = undefined this should work, but doesn't.  being too strict somewhere unused "vunfoldi_"
 
--- vunfoldi :: (Count c, Aggregate b, EType a) =>
+-- vunfoldi :: (Count c, Agg b, Typed a) =>
 --   (E Word -> b -> (E a, b)) -> b -> E (V c a)
 -- vunfoldi f b = snd $ while ((0, b), undef) $ \((i, b), v) ->
 --   ( i `lt` countof v
 --   , let (a,b') = f i b in ((i + 1, b'), ins v (a, i))
 --   )
 
--- vfoldi :: (Count c, EType a, Aggregate b) =>
+-- vfoldi :: (Count c, Typed a, Agg b) =>
 --   (E Word -> b -> E a -> b) -> b -> E (V c a) -> b
 -- vfoldi f x ys = snd $ while (0, x) $ \(i, x) ->
 --   ( i `lt` countof ys
 --   , (i + 1, f i x $ ex ys i)
 --   )
                               
--- var :: EType a => Integer -> E a
+-- var :: Typed a => Integer -> E a
 -- var x = let v = E $ U.var (typeof v) x in v
 
 -- compile (E x) = U.compile x
@@ -137,131 +223,118 @@ data V c a
 -- true :: E Bool
 -- true = E $ U.EAExp $ U.Int U.tbool 1
 
--- eq :: (EType a, Ord a) => E a -> E a -> E Bool
+-- eq :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- eq = binop Eq
--- band :: (EType a, Integral a) => E a -> E a -> E a
+-- band :: (Typed a, Integral a) => E a -> E a -> E a
 -- band = binop And
--- bor :: (EType a, Integral a) => E a -> E a -> E a
+-- bor :: (Typed a, Integral a) => E a -> E a -> E a
 -- bor = binop Or
--- xor :: (EType a, Integral a) => E a -> E a -> E a
+-- xor :: (Typed a, Integral a) => E a -> E a -> E a
 -- xor = binop Xor
--- lshr :: (EType a, Integral a) => E a -> E a -> E a
+-- lshr :: (Typed a, Integral a) => E a -> E a -> E a
 -- lshr = binop Lshr
--- ashr :: (EType a, Integral a) => E a -> E a -> E a
+-- ashr :: (Typed a, Integral a) => E a -> E a -> E a
 -- ashr = binop Ashr
--- shl :: (EType a, Integral a) => E a -> E a -> E a
+-- shl :: (Typed a, Integral a) => E a -> E a -> E a
 -- shl = binop Shl
 
--- ne :: (EType a, Ord a) => E a -> E a -> E Bool
+-- ne :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- ne = binop Ne
--- gt :: (EType a, Ord a) => E a -> E a -> E Bool
+-- gt :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- gt = binop Gt
--- lt :: (EType a, Ord a) => E a -> E a -> E Bool
+-- lt :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- lt = binop Lt
--- gte :: (EType a, Ord a) => E a -> E a -> E Bool
+-- gte :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- gte = binop Gte
--- lte :: (EType a, Ord a) => E a -> E a -> E Bool
+-- lte :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- lte = binop Lte
 
--- class Aggregate a where
---   agg :: Tree U.Exp -> a
---   unAgg :: a -> Tree U.Exp
+class Agg a where
+  agg :: Tree Exp -> a
+  unAgg :: a -> Tree Exp
 
--- instance Aggregate (E a) where
---   agg (Leaf x) = E x
---   unAgg (E x) = Leaf x
+instance Agg (E a) where
+  agg (Leaf x) = E x
+  unAgg (E x) = Leaf x
 
--- instance (Aggregate a, Aggregate b) => Aggregate (a, b) where
---   agg (Node [a,b]) = (agg a, agg b)
---   unAgg (a,b) = Node [unAgg a, unAgg b]
+instance (Agg a, Agg b) => Agg (a, b) where
+  agg (Node [a,b]) = (agg a, agg b)
+  unAgg (a,b) = Node [unAgg a, unAgg b]
 
--- instance (Aggregate a, Aggregate b, Aggregate c) => Aggregate (a, b, c) where
---   agg (Node [a,b,c]) = (agg a, agg b, agg c)
---   unAgg (a,b,c) = Node [unAgg a, unAgg b, unAgg c]
+instance (Agg a, Agg b, Agg c) => Agg (a, b, c) where
+  agg (Node [a,b,c]) = (agg a, agg b, agg c)
+  unAgg (a,b,c) = Node [unAgg a, unAgg b, unAgg c]
 
--- instance (Aggregate a) => Aggregate [a] where
---   agg (Node xs) = map agg xs
---   unAgg xs = Node $ map unAgg xs
+instance (Agg a) => Agg [a] where
+  agg (Node xs) = map agg xs
+  unAgg xs = Node $ map unAgg xs
 
--- switch :: (EType a, Aggregate b) => E a -> [b] -> b -> b
+-- switch :: (Typed a, Agg b) => E a -> [b] -> b -> b
 -- switch a bs c = agg $ U.switch (unE a) (map unAgg bs) (unAgg c)
 
 -- emax x y = eif (x `gte` y) x y
 
--- while :: (Aggregate a) => a -> (a -> (E Bool, a)) -> a
--- while x f = agg $ U.while (unAgg x) g
---   where g = \bs -> let (a, b) = f (agg bs) in (unE a, unAgg b)
-
--- reps :: (Aggregate b) => E Word -> b -> (b -> b) -> b
+-- reps :: (Agg b) => E Word -> b -> (b -> b) -> b
 -- reps n b f = snd $ while (n,b) $ \(n,b) ->
 --   (n `gt` 0
 --   , (n - 1, f b)
 --   )
 
--- eif :: (EType a) => E Bool -> E a -> E a -> E a
+-- eif :: (Typed a) => E Bool -> E a -> E a -> E a
 -- eif x y z = switch x [z] y
 
   
--- instance (EType a, Fractional a) => Fractional (E a) where
---   fromRational x = let v = E $ U.EAExp $ U.Rat (typeof v) x in v
---   (/) = binop Quot
+ternop :: (Typed a, Typed b, Typed c, Typed d) => UOp -> E a -> E b -> E c -> E d
+ternop o x y z = let v = E $ EOp (Op o $ typeof v) [unE x, unE y, unE z] in v
 
--- instance (EType a, Num a) => Num (E a) where
---   fromInteger x = let v = E $ U.EAExp $ U.Int (typeof v) x in v
---   (*) = binop Mul
---   (+) = binop Add
---   (-) = binop Sub
---   abs = unop Abs
---   signum = unop Signum
--- -- instance (EType a, Integral a) => Integral (E a) where
--- --   quotRem x y = (binop Quot x y, binop Rem x y) -- BAL: do these match llvm div, rem?
--- --   toInteger = error "toInteger"
+binop :: (Typed a, Typed b, Typed c) => UOp -> E a -> E b -> E c
+binop o x y = let v = E $ EOp (Op o $ typeof v) [unE x, unE y] in v
 
--- -- instance (EType a, Real a) => Real (E a) where toRational = error "toRational"
--- -- instance (EType a, Ord a) => Ord (E a) where compare = error "compare"
--- -- instance (EType a, Eq a) => Eq (E a) where (==) = error "(==)"
--- instance (EType a, Enum a, Num a) => Enum (E a) where
+unop :: (Typed a, Typed b) => UOp -> E a -> E b
+unop o x = let v = E $ EOp (Op o $ typeof v) [unE x] in v
+
+-- instance (Num a, Typed a) => Num (E a) where
+
+-- instance (Typed a, Integral a) => Integral (E a) where
+--   quotRem x y = (binop Quot x y, binop Rem x y) -- BAL: do these match llvm div, rem?
+--   toInteger = unused "toInteger"
+
+-- instance (Typed a, Real a) => Real (E a) where toRational = unused "toRational"
+-- instance (Typed a, Ord a) => Ord (E a) where compare = unused "compare"
+-- instance (Typed a, Eq a) => Eq (E a) where (==) = unused "(==)"
+
+while :: Agg a => a -> (a -> (E Bool, a)) -> a
+while x f = agg $ U.while (unAgg x) g
+  where g = \bs -> let (a, b) = f (agg bs) in (unE a, unAgg b)
+
+runEval = U.runEval . unE
+
+-- if' :: Agg a => E Bool -> a -> a -> a
+-- if' 
+
+switch :: Agg a => E Word -> [a] -> a -> a
+switch a bs c = agg $ U.switch (unE a) (map unAgg bs) (unAgg c)
+
+-- instance (Typed a, Enum a, Num a) => Enum (E a) where
 --   toEnum = fromInteger . fromIntegral
 --   fromEnum x = case unE x of
---     EAExp (U.Int _ i) -> fromInteger i
---     _ -> error "fromEnum:E a"
+--     EAExp (CAExp (Int _ i)) -> fromInteger i
+--     _ -> unused "Enum (E a):fromEnum"
 
--- div' :: Integral a => E a -> E a -> E a
--- div' = binop Quot
--- mod' :: Integral a => E a -> E a -> E a
--- mod' = binop Rem
-
--- fastpow :: (EType a, EType b, Num a, Integral b, Ord b, Real b) => E a -> E b -> E a
+-- fastpow :: (Typed a, Typed b, Num a, Integral b, Ord b, Real b) => E a -> E b -> E a
 -- fastpow b e =
 --   snd $ while ((b, e), 1) $ \((b, e), r) ->
 --     (e `gt` 0, ((b * b, e `div'` 2), eif ((e `mod'` 2) `ne` 0) (r * b) r))
 
--- dbl x = x + x
+-- class Foo a where
+--   (%) :: a -> a -> a
+--   (/
+-- instance (Typed a, Fractional a) => Fractional (E a) where
+--   (/) = binop Quot
 
--- ternop :: Op -> E a -> E b -> E c -> E d
--- ternop o (E x) (E y) (E z) = E $ U.ternop o x y z
+dbl x = x + x
 
--- binop :: Op -> E a -> E b -> E c
--- binop o (E x) (E y) = E $ U.binop o x y
-
--- unop :: Op -> E a -> E b
--- unop o (E x) = E $ U.unop o x
-
--- instance (EType a, Floating a) => Floating (E a) where
---   pi = 3.141592653589793 -- BAL: use prelude value of pi?
---   sqrt = unop Sqrt
---   exp = unop Exp
---   log = unop Log
---   sin = unop Sin
---   cos = unop Cos
---   asin = unop Asin
---   atan = unop Atan
---   acos = unop Acos
---   sinh = unop Sinh
---   cosh = unop Cosh
---   asinh = unop Asinh
---   atanh = unop Atanh
---   acosh = unop Acosh
+-- instance (Typed a, Floating a) => Floating (E a) where
 
 -- -- N-Body
 
@@ -402,7 +475,7 @@ data V c a
 -- maxV16W4 :: E V16W4
 -- maxV16W4 = 0xffffffffffffffff
 
--- factorial :: (EType a, Integral a) => E a -> E a
+-- factorial :: (Typed a, Integral a) => E a -> E a
 -- factorial n0 = snd $ while (n0,1) $ \(n,r) -> (n `gt` 1, (n - 1, r * n))
 
 -- fkRotate :: E V16W4 -> E Word64 -> E V16W4
@@ -412,7 +485,7 @@ data V c a
 --     v2 = shl4 (n - 1) v
 --     mask = shl4 n maxV16W4
 
--- fkFlip :: (EType a, Num a) => E V16W4 -> E a
+-- fkFlip :: (Typed a, Num a) => E V16W4 -> E a
 -- fkFlip v0 = snd $ while (v0, 0) $ \(v,n) ->
 --   ( ix v 0 `gt` 1
 --   , (fkReverse v, n + 1)
@@ -436,7 +509,7 @@ data V c a
 --     , (fkRotate p i, (setix c i 1, i + 1))
 --     )
 
--- fkMain :: (EType a, Integral a) => E a -> (E a, E a)
+-- fkMain :: (Typed a, Integral a) => E a -> (E a, E a)
 -- fkMain n =
 --   fst $ while ((0,0), (factorial n, perm0)) $ \((max_flips, checksum),(n,pci@(p,_))) ->
 --     ( n `gt` 0
