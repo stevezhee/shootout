@@ -28,9 +28,11 @@ foo x = do
 main :: IO ()
 main = do
   -- print tt
-  foo $ fastpow 2 (3 :: E Int)
-  foo $ fastpow (3 :: E Int) 2
-  foo $ dbl (dbl (2 :: E Double))
+  -- foo $ fastpow 2 (3 :: E Int)
+  -- foo $ fastpow (3 :: E Int) 2
+  -- foo $ dbl (dbl (2 :: E Double))
+  compile $ dbl $ fastpow 2 (3 :: E Int)
+  -- compile $ dbl (dbl (2 :: E Double))
   
 -- main = compile $
 --   spctMain C1

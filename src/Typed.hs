@@ -9,12 +9,12 @@
 module Typed
   ( module Typed,
     PP(..),
-    St(..)
+    ESt(..)
   )
 where
 
 import qualified Untyped as U
-import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Const(..), AExp(..), PP(..), St(..))
+import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Const(..), AExp(..), PP(..), ESt(..), Expr(..))
 import qualified Prelude as P
 -- import Data.Word
 -- import Data.List
@@ -92,12 +92,12 @@ class Typed a => Floating a where
   acosh :: a -> a
 
 instance Floating a => Floating (E a) where
-  fromRational x = let v = E $ EAExp $ CAExp $ Rat (typeof v) x in v
+  fromRational x = let v = E $ U.rat (typeof v) x in v
   acosh = unop Acosh
   atanh = unop Atanh
   asinh = unop Asinh
   sqrt = unop Sqrt
-  exp = unop Exp
+  exp = unop ExpF
   log = unop Log
   sin = unop Sin
   cos = unop Cos
@@ -114,7 +114,7 @@ instance (Typed a, Arith a) => Arith (E a) where
   (/) = binop Div
   (%) = binop Rem
   abs = unop Abs
-  fromInteger x = let v = E $ EAExp $ CAExp $ Rat (typeof v) (P.toRational x) in v
+  fromInteger x = let v = E $ U.rat (typeof v) (P.toRational x) in v
 
 instance Cmp Float Bool
 instance Cmp Double Bool
@@ -215,7 +215,7 @@ count = fromInteger . countof
 -- var :: Typed a => Integer -> E a
 -- var x = let v = E $ U.var (typeof v) x in v
 
--- compile (E x) = U.compile x
+compile = U.compile . unE
 
 -- false :: E Bool
 -- false = E $ U.EAExp $ U.Int U.tbool 0
@@ -283,15 +283,18 @@ instance (Agg a) => Agg [a] where
 -- eif :: (Typed a) => E Bool -> E a -> E a -> E a
 -- eif x y z = switch x [z] y
 
+
+app :: Typed a => UOp -> [Exp] -> E a
+app o xs = let v = E $ U.app o (typeof v) xs in v
   
 ternop :: (Typed a, Typed b, Typed c, Typed d) => UOp -> E a -> E b -> E c -> E d
-ternop o x y z = let v = E $ EOp (Op o $ typeof v) [unE x, unE y, unE z] in v
+ternop o x y z = app o [unE x, unE y, unE z]
 
 binop :: (Typed a, Typed b, Typed c) => UOp -> E a -> E b -> E c
-binop o x y = let v = E $ EOp (Op o $ typeof v) [unE x, unE y] in v
+binop o x y = app o [unE x, unE y]
 
 unop :: (Typed a, Typed b) => UOp -> E a -> E b
-unop o x = let v = E $ EOp (Op o $ typeof v) [unE x] in v
+unop o x = app o [unE x]
 
 -- instance (Num a, Typed a) => Num (E a) where
 

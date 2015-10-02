@@ -13,3 +13,5 @@ TAGS
 *.ll
 *.bc
 *.s
+*.dot
+*.svg

@@ -13,20 +13,20 @@
 
 module Untyped where
 
-import           Data.Hashable
-import           GHC.Generics (Generic)
+import Data.Hashable
+import GHC.Generics (Generic)
 import qualified Text.PrettyPrint as PP
-import           Text.PrettyPrint hiding (int, empty)
+import Text.PrettyPrint hiding (int, empty)
 import Data.Traversable
 
 import Debug.Trace
 -- import           Control.Applicative hiding (empty)
 -- import           Control.Exception
 import Control.Monad.State hiding (mapM, sequence)
--- import qualified Data.HashMap.Strict as M
-import  Data.List (sort)
+import qualified Data.HashMap.Strict as M
+import Data.List (sort)
 --   hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr, concat)
-import           Data.Maybe
+import Data.Maybe
 -- import  Prelude
 --   hiding (lookup, elem, maximum, concatMap, mapM, sequence, foldr, concat)
 -- import Data.Array
@@ -47,9 +47,9 @@ import           Data.Maybe
 import Data.Foldable
 -- import Data.Bits
 import Data.Graph hiding (Tree, Node)
--- import Data.GraphViz hiding (Int)
--- import System.Process
--- import qualified Data.Text.Lazy.IO as T
+import Data.GraphViz hiding (Int)
+import System.Process hiding (env)
+import qualified Data.Text.Lazy.IO as T
 import Data.Ratio
 
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
@@ -314,9 +314,41 @@ instance Typed AExp where
     CAExp a -> typeof a
     VAExp a -> typeof a
 
+app o t = Exp . App (Op o t)
+rat t = Exp . AExp . CAExp . Rat t
+
+data Expr a
+  = AExp AExp
+  | App Op [a]
+  | Switch a [a] a
+  | While Integer a [(Bound, (a, a))] Bound
+  deriving (Show, Eq, Ord, Generic)
+instance Hashable (Expr AExp)
+
+newtype CExp = CExp{ unCExp :: Expr AExp } deriving (Show, Eq, Ord, Generic)
+instance Hashable CExp
+newtype Exp = Exp{ unExp :: Expr Exp } deriving (Show, Eq, Ord)
+
+-- data Exp
+--   = AExp AExp
+--   | App Op [Exp]
+--   | Switch Exp [Exp] Exp
+--   | While Integer Exp [(Bound, (Exp, Exp))] Bound
+--   deriving (Show, Eq, Ord)
+
+instance Typed Exp where typeof = typeof . unExp
+instance Typed CExp where typeof = typeof . unCExp
+
+instance Typed a => Typed (Expr a) where
+  typeof = \case
+    AExp a -> typeof a
+    App a _ -> typeof a
+    Switch _ _ c -> typeof c
+    While _ _ _ c -> typeof c
+
 data UOp
   = Add | Mul | Sub | Div | Rem | And | Or | Xor | Shl | Lshr | Ashr | Eq | Ne | Gt | Lt | Gte | Lte
-  | Abs | Signum | Sqrt | Exp | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh | Acosh
+  | Abs | Signum | Sqrt | ExpF | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh | Acosh
   | InsertElement | ExtractElement | ShuffleVector
   | ToFP
   deriving (Show, Eq, Ord, Generic)
@@ -346,20 +378,6 @@ data Op = Op{ uop :: UOp, otype :: Type  } deriving (Show, Eq, Ord, Generic)
 instance Hashable Op
 instance Typed Op where typeof = otype
 instance PP Op where pp = pp . uop
-
-data Exp
-  = EAExp AExp
-  | EOp Op [Exp]
-  | ESwitch Exp [Exp] Exp
-  | EWhile Integer Exp [(Bound, (Exp, Exp))] Bound
-  deriving (Show, Eq, Ord)
-
-instance Typed Exp where
-  typeof = \case
-    EAExp a -> typeof a
-    EOp a _ -> typeof a
-    ESwitch _ _ c -> typeof c
-    EWhile _ _ _ c -> typeof c
 
 binop :: (Rational -> Rational -> Rational) -> [Rational] -> Rational
 binop f = \case
@@ -400,43 +418,45 @@ optbl t =
   (Gte, cmpop (>=)) :
   []
 
-data St = St{ env :: [(Var, Rational)] } deriving Show
+data ESt = ESt{ env :: [(Var, Rational)] } deriving Show
 
-instance PP St where pp = vcat . map pp . env
+instance PP ESt where pp = vcat . map pp . env
 
-type Eval a = State St a
+type Eval a = State ESt a
 
-evalBound b e = eval e >>= \v -> modify $ \st -> st{ env = [(BVar b, v)] ++ env st }
+evalBound b e = evalExp e >>= \v -> modify $ \st -> st{ env = [(BVar b, v)] ++ env st }
 
-tt = while t tbody
+-- tt = while t tbody
 
-tbody = \(Node [Leaf e, Leaf f]) -> (e `lt32` int32 42, Node [Leaf $ add32 (int32 1) e, Leaf $ add32 f e])
+-- tbody = \(Node [Leaf e, Leaf f]) -> (e `lt32` int32 42, Node [Leaf $ add32 (int32 1) e, Leaf $ add32 f e])
 
-add32 x y = EOp (Op Add tsint32) [x,y]
-lt32 x y = EOp (Op Lt tbool) [x,y]
+-- add32 x y = App (Op Add tsint32) [x,y]
+-- lt32 x y = App (Op Lt tbool) [x,y]
 
-tsint32 = TSInt 32
-int32 x = EAExp $ CAExp $ Rat tsint32 x
+-- tsint32 = TSInt 32
+-- int32 x = AExp $ CAExp $ Rat tsint32 x
 
-t = while (Node [Leaf $ int32 0, Leaf $ int32 4]) tbody
+-- t = while (Node [Leaf $ int32 0, Leaf $ int32 4]) tbody
 
-ttt = while (Leaf $ int32 0) $ \(Leaf e) -> (e `lt32` int32 42, Leaf $ add32 (int32 1) e)
+-- ttt = while (Leaf $ int32 0) $ \(Leaf e) -> (e `lt32` int32 42, Leaf $ add32 (int32 1) e)
 
-eval :: Exp -> Eval Rational
+evalExp = eval . toExpr
+
+eval :: Expr Exp -> Eval Rational
 eval = \case
-  EAExp a -> case a of
+  AExp a -> case a of
     CAExp b -> case b of
       Rat _ r -> return r
       Undef _ -> error "eval:undef"
     VAExp b -> gets env >>= return . fromMaybe (unused "eval:VAExp") . lookup b
-  EOp a bs -> let f = fromMaybe (unused "eval:EOp") (lookup (uop a) $ optbl $ otype a) in mapM eval bs >>= return . f
-  ESwitch a bs c -> do
-    i <- eval a >>= return . fromInteger . numerator
-    eval $ if i < length bs then (bs !! i) else c
-  EWhile _ a t c -> do
+  App a bs -> let f = fromMaybe (unused "eval:App") (lookup (uop a) $ optbl $ otype a) in mapM evalExp bs >>= return . f
+  Switch a bs c -> do
+    i <- evalExp a >>= return . fromInteger . numerator
+    evalExp $ if i < length bs then (bs !! i) else c
+  While _ a t c -> do
     mapM_ (\(b, (e,_)) -> evalBound b e) t
     let go = do
-          r <- eval a >>= return . toEnum . fromInteger . numerator
+          r <- evalExp a >>= return . toEnum . fromInteger . numerator
           if r
              then do
                mapM_ (\(b, (_,e)) -> evalBound b e) t
@@ -444,19 +464,19 @@ eval = \case
              else eval $ bvar c
     go
 
-runEval :: Exp -> (Rational, St)
-runEval x = flip runState (St []) $ eval x
+runEval :: Exp -> (Rational, ESt)
+runEval x = flip runState (ESt []) $ evalExp x
 
 maximumBV :: (Foldable t, Functor t) => t Exp -> Integer
 maximumBV = maximum . fmap maxBV
 
 maxBV :: Exp -> Integer
-maxBV = \case
-  EAExp _ -> 0 -- not a typo, see http://pchiusano.github.io/2014-06-20/simple-debruijn-alternative.html
+maxBV x = case toExpr x of
+  AExp _ -> 0 -- not a typo, see http://pchiusano.github.io/2014-06-20/simple-debruijn-alternative.html
                -- or http://www.cse.chalmers.se/~emax/documents/axelsson2013using.pdf
-  EOp _ bs -> maximumBV bs
-  ESwitch a bs c -> maximumBV (a : c : bs)
-  EWhile n _ _ _ -> n
+  App _ bs -> maximumBV bs
+  Switch a bs c -> maximumBV (a : c : bs)
+  While n _ _ _ -> n
   
 zipWithTree :: (a -> b -> c) -> Tree a -> Tree b -> Tree c -- trees must have the same shape
 zipWithTree f x y =
@@ -472,51 +492,51 @@ zipTree :: Tree a -> Tree b -> Tree (a,b)
 zipTree = zipWithTree (,)
 
 switch :: Exp -> [Tree Exp] -> Tree Exp -> Tree Exp
-switch x ys z = fmap (\(a:bs) -> ESwitch x bs a) $ listToTree (z : ys)
-
-bvar :: Bound -> Exp
-bvar = EAExp . VAExp . BVar
+switch x ys z = fmap (\(a:bs) -> Exp $ Switch x bs a) $ listToTree (z : ys)
 
 while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
-while x f = fmap (EWhile (n+m) e $ sort $ toList $ zipTree xb $ zipTree x x1) xb
+while x f = fmap (Exp . (While (n+m) e $ sort $ toList $ zipTree xb $ zipTree x x1)) xb
   where
     m = fromIntegral $ length x
     n = maximum [maximumBV x, maxBV e, maximumBV x1]
     (e, x1) = f x0
-    x0 = fmap bvar xb
+    x0 = fmap (Exp . bvar) xb
     xb =
       snd $ mapAccumR (\(b:bs) j -> (bs, Bound (typeof j) Nothing b)) [n..] x
-    
--- while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
--- while xs f = fmap (\(v, _) -> EPhi v w) t
---   -- ^ BAL: identify unused loop variables (remove(warning?) or error)
---   where
---     w = EWhile (n + m) e t
---     t = zipTree vs $ fmap (\(a,b) -> [a,b]) $ zipTree xs ys
---     m = genericLength $ toList xs
---     (e, ys) = f $ fmap (EAExp . BVar) vs
---     vs = bound n xs
---     n = maximumBV (e : toList xs ++ toList ys)
-    
--- switch :: Exp -> [Tree Exp] -> Tree Exp -> Tree Exp
--- switch x ys z = fmap (flip EPhi $ ESwitch (n + m) vs x ys z) vs
---   where
---     m = genericLength $ toList z
---     vs = bound n z
---     n = maximumBV (x : toList z ++ concatMap toList ys)
 
-  -- | ESwitch NumBV (Tree Bound) Exp [Tree Exp] (Tree Exp)
-  -- | EWhile NumBV Exp (Tree (Phi Exp))
+bvar :: Bound -> Expr Exp
+bvar = AExp . VAExp . BVar
+    
+-- -- while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
+-- -- while xs f = fmap (\(v, _) -> EPhi v w) t
+-- --   -- ^ BAL: identify unused loop variables (remove(warning?) or error)
+-- --   where
+-- --     w = While (n + m) e t
+-- --     t = zipTree vs $ fmap (\(a,b) -> [a,b]) $ zipTree xs ys
+-- --     m = genericLength $ toList xs
+-- --     (e, ys) = f $ fmap (AExp . BVar) vs
+-- --     vs = bound n xs
+-- --     n = maximumBV (e : toList xs ++ toList ys)
+    
+-- -- switch :: Exp -> [Tree Exp] -> Tree Exp -> Tree Exp
+-- -- switch x ys z = fmap (flip EPhi $ Switch (n + m) vs x ys z) vs
+-- --   where
+-- --     m = genericLength $ toList z
+-- --     vs = bound n z
+-- --     n = maximumBV (x : toList z ++ concatMap toList ys)
+
+  -- | Switch NumBV (Tree Bound) Exp [Tree Exp] (Tree Exp)
+  -- | While NumBV Exp (Tree (Phi Exp))
   -- | EPhi Bound Exp
 
 tbool = TUInt 1
 
 -- instance Typed Exp where
 --   typeof = \case
---     EAExp a -> typeof a
---     EOp _ a bs -> typeofOp a bs
---     ESwitch{} -> TAggregate
---     EWhile{} -> TAggregate
+--     AExp a -> typeof a
+--     App _ a bs -> typeofOp a bs
+--     Switch{} -> TAggregate
+--     While{} -> TAggregate
 --     EPhi a _ -> typeof a
 
 -- instance Typed CExp where typeof = typeof . fromCExp
@@ -710,22 +730,19 @@ tbool = TUInt 1
 
 -- fromCExp :: CExp -> Exp
 -- fromCExp = \case
---   CAExp a -> EAExp a
---   COp a bs -> EOp 0 a $ map EAExp bs
+--   CAExp a -> AExp a
+--   COp a bs -> App 0 a $ map AExp bs
 --   CSwitch vs a bss cs ->
---     ESwitch 0 (listToTree vs) (EAExp a) (map (fmap EAExp . listToTree) bss) (fmap EAExp $ listToTree cs)
+--     Switch 0 (listToTree vs) (AExp a) (map (fmap AExp . listToTree) bss) (fmap AExp $ listToTree cs)
 --   CWhile a bs ->
---     EWhile 0 (EAExp a) (flip fmap (listToTree bs) $ \(v, [p, q]) -> (v, [EAExp p, EAExp q]))
---   CPhi a b -> EPhi a $ EAExp b
+--     While 0 (AExp a) (flip fmap (listToTree bs) $ \(v, [p, q]) -> (v, [AExp p, AExp q]))
+--   CPhi a b -> EPhi a $ AExp b
 
 -- listToTree :: [a] -> Tree a
 -- listToTree = Node . map Leaf
 
 -- instance PP CExp where pp = pp . fromCExp
   
--- aexp :: Exp -> M AExp
--- aexp x = cexp x >>= toAExp
-
 -- -- evalOpRat :: Op -> [Rational] -> Rational
 -- -- evalOpRat x ys = case x of
 -- --   Add -> a + b
@@ -838,6 +855,9 @@ tbool = TUInt 1
 --     where
 --       rToR f x = Rat t . f x
 
+-- aexp :: Exp -> M AExp
+-- aexp x = cexp x >>= toAExp
+
 -- toAExp :: CExp -> M AExp
 -- toAExp = \case
 --   CAExp a -> return a
@@ -886,33 +906,55 @@ tbool = TUInt 1
 --     f a' = COp a' [c, b]
 --   _ -> x
 
--- swap (x,y) = (y,x)
--- pair x y = (x,y)
+swap (x,y) = (y,x)
 
 -- instance (Hashable b, Eq b, Num a, PP a, PP b, Ord b, Ord a) => PP (MapR a b) where
 --   pp = vcat . map pp . sort . map swap . M.toList . hmapR
 
--- lookupR :: (Hashable b, Eq b) => b -> MapR a b -> Maybe a
--- lookupR b = M.lookup b . hmapR
+lookupR :: (Hashable b, Eq b) => b -> MapR a b -> Maybe a
+lookupR b = M.lookup b . hmapR
 
--- insertR :: (Hashable b, Eq b, Enum a) => b -> MapR a b -> (a, MapR a b)
--- insertR b tbl = case lookupR b tbl of
---   Just a -> (a, tbl)
---   Nothing -> (a, tbl{ next = succ a, hmapR = M.insert b a $ hmapR tbl })
---     where a = next tbl
-    
+insertR :: (Hashable b, Eq b, Enum a) => b -> MapR a b -> (a, MapR a b)
+insertR b tbl = case lookupR b tbl of
+  Just a -> (a, tbl)
+  Nothing -> (a, tbl{ next = succ a, hmapR = M.insert b a $ hmapR tbl })
+    where a = next tbl
+
+type F a = State (MapR Integer CExp) a
+
+foo x = toAExp x
+
+toAExp :: Exp -> F AExp
+toAExp x0 = do
+  x <- toCExp x0
+  case toExpr x of
+    AExp a -> return a
+    _ -> do
+      tbl <- get
+      let (a, tbl') = insertR x tbl
+      modify $ \_ -> tbl'
+      return $ VAExp $ FVar $ Free (typeof x) a
+
+toCExp :: Exp -> F CExp
+toCExp x = CExp <$> case toExpr x of
+  AExp a -> return $ AExp a
+  App a bs -> App a <$> mapM toAExp bs
+  Switch a bs c -> Switch <$> toAExp a <*> mapM toAExp bs <*> toAExp c
+  While a b cs d -> While a <$> toAExp b <*> mapM f cs <*> return d
+    where f (p, (q, r)) = (,) p <$> ((,) <$> toAExp q <*> toAExp r)
+
 -- cexp :: Exp -> M CExp
 -- cexp = \case
---   EAExp a -> return $ CAExp a
---   EOp _ b cs -> COp b <$> mapM aexp cs
---   ESwitch _ vs b cs d -> do
+--   AExp a -> return $ CAExp a
+--   App _ b cs -> COp b <$> mapM aexp cs
+--   Switch _ vs b cs d -> do
 --     cs' <- mapM (mapM aexp . toList) cs
 --     d' <- mapM aexp (toList d)
 --     case reverse $ dropWhile ((==) d') $ reverse cs' of
 --       [] -> return $ CSwitch (toList vs) (Undef $ TUInt 1) [] d' -- BAL: haven't tested this yet
 --       cs'' -> aexp b >>= \b' -> return $ CSwitch (toList vs) b' cs'' d'
     
---   EWhile _ a bs -> CWhile <$> aexp a <*> mapM f (toList bs)
+--   While _ a bs -> CWhile <$> aexp a <*> mapM f (toList bs)
 --     where f (v, ps) = pair v <$> mapM aexp ps
 --   EPhi a b -> CPhi a <$> aexp b
 
@@ -923,16 +965,33 @@ tbool = TUInt 1
 
 ppSwitch a bs c = vcat [text "switch" <+> ppParens a, nest 2 $ pp $ bs ++ [c]]
 
-ppParens x = case x of
-  EAExp{} -> pp x
+ppParens :: (PP a, IsExpr a) => a -> Doc
+ppParens x = case toExpr x of
+  AExp{} -> pp x
   _ -> parens $ pp x
 
 ppStore x y = pp x <+> text ":=" <+> pp y
 
-instance PP Exp where
+class IsExpr a where
+  toExpr :: a -> Expr Exp
+
+toExp = Exp . AExp
+
+instance IsExpr Exp where toExpr = unExp
+instance IsExpr CExp where
+  toExpr x = case unCExp x of
+    AExp a -> AExp a
+    App a bs -> App a $ map toExp bs
+    Switch a bs c -> Switch (toExp a) (map toExp bs) (toExp c)
+    While a b cs d -> While a (toExp b) [ (p, (toExp q, toExp r)) | (p, (q,r)) <- cs ] d
+
+instance PP CExp where pp = pp . toExpr
+instance PP Exp where pp = pp . toExpr
+  
+instance (PP a, IsExpr a) => PP (Expr a) where
   pp = \case
-    ESwitch a bs c -> ppSwitch a bs c
-    EOp a bs
+    Switch a bs c -> ppSwitch a bs c
+    App a bs
     --   | a == ExtractElement -> pp b0 <> brackets (pp b1)
     --   | a == InsertElement -> pp b0 <> brackets (pp b2) <+> text "<-" <+> pp b1
       | isBinop a -> ppParens b0 <+> pp a <+> ppParens b1
@@ -941,13 +1000,18 @@ instance PP Exp where
         b0:_ = bs
         _:b1:_ = bs
         _:_:b2:_ = bs
-    EAExp a -> pp a
-    EWhile _ a bs c -> vcat [pp c <+> text "from", nest 2 $ vcat [ vcat $ map (\(p, (q, _)) -> ppStore p q) bs, text "while" <+> ppParens a, nest 2 $ vcat $ map (\(p, (_, r)) -> ppStore p r) bs] ]
+    AExp a -> pp a
+    While _ a bs c ->
+      vcat [ pp c <+> text "from"
+           , nest 2 $ vcat [ vcat $ map (\(p, (q, _)) -> ppStore p q) bs
+                           , text "while" <+> ppParens a
+                           , nest 2 $ vcat $ map (\(p, (_, r)) -> ppStore p r) bs
+                           ]
+           ]
     -- EPhi a b -> hsep [text "phi", pp a, ppParens b]
 
 -- instance (Foldable t, PP a) => PP (t a) where pp = pp . toList
 
-    
 -- instance (PP a, PP b, PP c, PP d) => PP (a,b,c,d) where
 --   pp (a,b,c,d) = parens (vcat [pp a, pp b, pp c, pp d])
 
@@ -956,24 +1020,24 @@ instance PP Exp where
 
 -- maxBV :: Exp -> Integer
 -- maxBV = \case
---   ESwitch i _ _ _ _ -> i
---   EOp i _ _ -> i
---   EAExp _ -> 0
---   EWhile i _ _ -> i
+--   Switch i _ _ _ _ -> i
+--   App i _ _ -> i
+--   AExp _ -> 0
+--   While i _ _ -> i
 --   EPhi _ b -> maxBV b
 
 -- binop :: Op -> Exp -> Exp -> Exp
--- binop o x y = EOp (maximumBV [x,y]) o [x,y]
+-- binop o x y = App (maximumBV [x,y]) o [x,y]
 
 -- ternop :: Op -> Exp -> Exp -> Exp -> Exp
--- ternop o x y z = EOp (maximumBV [x,y,z]) o [x,y,z]
+-- ternop o x y z = App (maximumBV [x,y,z]) o [x,y,z]
 
 -- unop :: Op -> Exp -> Exp
--- unop o x = EOp (maxBV x) o [x]
+-- unop o x = App (maxBV x) o [x]
 
 unused = error . (++) "unused:"
 
--- var t = EAExp . UVar . User t
+-- var t = AExp . UVar . User t
     
 -- bound :: Typed a => Integer -> Tree a -> Tree Bound
 -- bound n = snd . mapAccumR (\(w:ws) x -> (ws, Bound (typeof x) Nothing $ n + w)) [0..]
@@ -983,10 +1047,10 @@ unused = error . (++) "unused:"
 -- zipTree (Leaf a) (Leaf b) = Leaf (a,b)
 -- zipTree _ _ = Node []
 
--- data MapR a b = MapR
---   { hmapR :: M.HashMap b a
---   , next :: a
---   } deriving Show
+data MapR a b = MapR
+  { hmapR :: M.HashMap b a
+  , next :: a
+  } deriving Show
 
 -- data St = St
 --   { blocks :: [Block]
@@ -1019,18 +1083,18 @@ unused = error . (++) "unused:"
   
 -- type M a = State (MapR Integer CExp) a
 
--- runCExpMap :: Exp -> (AExp, MapR Integer CExp)
--- runCExpMap = flip runState (MapR M.empty 0) . aexp
+runCExpMap :: Exp -> (AExp, MapR Integer CExp)
+runCExpMap = flip runState (MapR M.empty 0) . toAExp
 
--- compile :: Exp -> IO ()
--- compile x = do
---   -- print $ pp x -- this gets big very quickly due to redundancy
---   let (a,b) = runCExpMap x
---   let n = next b
---   let bs = map swap $ M.toList $ hmapR b
---   -- print $ pp a
---   -- print a
---   viz n bs
+compile :: Exp -> IO ()
+compile x = do
+  -- print $ pp x -- this gets big very quickly due to redundancy
+  let (a,b) = runCExpMap x
+  let n = next b
+  let bs = map swap $ M.toList $ hmapR b
+  -- print $ pp a
+  -- print a
+  viz n bs
 -- {-
 --   let (us, bs) = runBlocks (maxBV x) a n bs
 --   -- print $ pp bs
@@ -1057,28 +1121,28 @@ unused = error . (++) "unused:"
 --       , bvars = array (0, pred nbv) $ zip [0 .. pred nbv] $ repeat Nothing
 --       }
 
--- depsAExp = \case
---   FVar a -> Just $ fid a
---   _ -> Nothing
+depsAExp = \case
+  VAExp (FVar a) -> Just $ fid a
+  _ -> Nothing
 
--- depsCExp x = catMaybes $ map depsAExp $ case x of
---   CAExp a -> [a]
---   COp _ bs -> bs
---   CSwitch _ b css ds -> b : ds ++ concat css
---   CWhile a bs -> a : concat (map snd bs)
---   CPhi _ b -> [b]
+depsCExp :: CExp -> [Integer]
+depsCExp x = catMaybes $ map depsAExp $ case unCExp x of
+  AExp a -> [a]
+  App _ bs -> bs
+  Switch b cs d -> b : d : cs
+  While _ a bs _ -> a : concatMap (\(_,(p,q)) -> [p,q]) bs
 
--- mkCExpNode :: (Integer, CExp) -> ((Integer, String), [(Integer, Integer, ())])
--- mkCExpNode (x,y) = ((x, "F" ++ show x ++ ": " ++ show (pp y)), [(x, a, ()) | a <- depsCExp y])
+mkCExpNode :: (Integer, CExp) -> ((Integer, String), [(Integer, Integer, ())])
+mkCExpNode (x,y) = ((x, "F" ++ show x ++ ": " ++ show (pp y)), [(x, a, ()) | a <- depsCExp y])
 
--- viz :: Integer -> [(Integer, CExp)] -> IO ()
--- viz n xs = do
---   let (bs, css) = unzip $ [((n, "Start"), [(n, n - 1, ())])] ++ map mkCExpNode xs
+viz :: Integer -> [(Integer, CExp)] -> IO ()
+viz n xs = do
+  let (bs, css) = unzip $ [((n, "Start"), [(n, n - 1, ())])] ++ map mkCExpNode xs
 
---   let params = nonClusteredParams{ fmtNode = singleton . toLabel . snd }
---   let s = printDotGraph $ graphElemsToDot params bs $ concat css
---   T.writeFile "t.dot" s
---   _ <- system "dot -Gordering=out -Tsvg t.dot > t.dot.svg"
---   return ()  
+  let params = nonClusteredParams{ fmtNode = singleton . toLabel . snd }
+  let s = printDotGraph $ graphElemsToDot params bs $ concat css
+  T.writeFile "t.dot" s
+  _ <- system "dot -Gordering=out -Tsvg t.dot > t.dot.svg"
+  return ()  
 
--- singleton a = [a]
+singleton a = [a]
