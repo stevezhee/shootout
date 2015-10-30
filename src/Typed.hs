@@ -9,16 +9,18 @@
 module Typed
   ( module Typed,
     PP(..),
-    ESt(..)
+    ESt(..),
+    compile
   )
 where
 
 import qualified Untyped as U
-import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Const(..), AExp(..), PP(..), ESt(..), Expr(..))
+import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Const(..), AExp(..), PP(..), ESt(..), Expr(..), Def, compile)
 import qualified Prelude as P
 -- import Data.Word
 -- import Data.List
-import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($))
+import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($), id, IO, undefined, (<$>), (<*>), (>>=), fromIntegral, return, String, (++))
+import Control.Monad.State hiding (mapM, sequence)
 
 instance PP (E a) where pp = pp . unE
   
@@ -68,7 +70,9 @@ instance Floating Float
 instance Arith Double
 instance Arith Float
 instance Arith Word
-
+instance Arith Integer where
+  fromInteger = id
+  
 instance Arith Int where
   fromInteger = P.fromInteger
   (+) = (P.+)
@@ -150,9 +154,6 @@ count = fromInteger . countof
 
 -- assert s b a = if b then a else error $ "assert:" ++ s
 
--- tofp :: (Typed a, Typed b, Integral a, Floating b) => E a -> E b
--- tofp x = let b = unop (U.ToFP $ typeof b) x in b
-
 -- undef :: (Typed a) => E a
 -- undef = let a = E $ U.EAExp $ U.Undef $ typeof a in a
 
@@ -211,11 +212,19 @@ count = fromInteger . countof
 --   ( i `lt` countof ys
 --   , (i + 1, f i x $ ex ys i)
 --   )
-                              
--- var :: Typed a => Integer -> E a
--- var x = let v = E $ U.var (typeof v) x in v
 
-compile = U.compile . unE
+uerr s = P.error $ "user error:" ++ s
+
+proc :: (Agg a, Typed b) => String -> (a -> E b) -> (a -> E b)
+proc s f = \a -> E $ U.proc s (unE $ f a) $ unAgg a
+
+def :: (Agg a, Typed b) => (a -> E b) -> Def
+def f = case unExp $ unE $ f instantiate of
+  Proc a _ -> a
+  _ -> uerr "unable to create definition (not a procedure)"
+
+instantiate :: Agg a => a
+instantiate = let v = agg $ U.instantiate $ typeofAgg v in v
 
 -- false :: E Bool
 -- false = E $ U.EAExp $ U.Int U.tbool 0
@@ -249,25 +258,40 @@ compile = U.compile . unE
 -- lte :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- lte = binop Lte
 
+-- type Unique a = State Integer a
+
+-- newUnique :: Unique Integer
+-- newUnique = undefined
+
 class Agg a where
   agg :: Tree Exp -> a
   unAgg :: a -> Tree Exp
+  typeofAgg :: a -> Tree Type
 
-instance Agg (E a) where
+instance Typed a => Agg (E a) where
   agg (Leaf x) = E x
   unAgg (E x) = Leaf x
+  typeofAgg = Leaf . typeof
 
+instance Agg () where
+  agg (Node []) = ()
+  unAgg () = Node []
+  typeofAgg _ = Node []
+  
 instance (Agg a, Agg b) => Agg (a, b) where
   agg (Node [a,b]) = (agg a, agg b)
   unAgg (a,b) = Node [unAgg a, unAgg b]
-
+  typeofAgg (_ :: (a,b)) = Node [ typeofAgg (unused "Agg (a,b)" :: a), typeofAgg (unused "Agg (a,b)" :: b) ]
+    
 instance (Agg a, Agg b, Agg c) => Agg (a, b, c) where
   agg (Node [a,b,c]) = (agg a, agg b, agg c)
   unAgg (a,b,c) = Node [unAgg a, unAgg b, unAgg c]
+  typeofAgg (_ :: (a,b,c)) = Node [ typeofAgg (unused "Agg (a,b,c)" :: a), typeofAgg (unused "Agg (a,b,c)" :: b), typeofAgg (unused "Agg (a,b,c)" :: c) ]
 
-instance (Agg a) => Agg [a] where
-  agg (Node xs) = map agg xs
-  unAgg xs = Node $ map unAgg xs
+-- instance (Agg a) => Agg [a] where
+--   agg (Node xs) = map agg xs
+--   unAgg xs = Node $ map unAgg xs
+--   newAgg = replicate(,,) <$> newAgg <*> newAgg <*> newAgg
 
 -- switch :: (Typed a, Agg b) => E a -> [b] -> b -> b
 -- switch a bs c = agg $ U.switch (unE a) (map unAgg bs) (unAgg c)
@@ -283,7 +307,6 @@ instance (Agg a) => Agg [a] where
 -- eif :: (Typed a) => E Bool -> E a -> E a -> E a
 -- eif x y z = switch x [z] y
 
-
 app :: Typed a => UOp -> [Exp] -> E a
 app o xs = let v = E $ U.app o (typeof v) xs in v
   
@@ -295,6 +318,9 @@ binop o x y = app o [unE x, unE y]
 
 unop :: (Typed a, Typed b) => UOp -> E a -> E b
 unop o x = app o [unE x]
+
+cast :: (Typed a, Typed b) => E a -> E b
+cast = unop Cast
 
 -- instance (Num a, Typed a) => Num (E a) where
 

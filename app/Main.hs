@@ -5,7 +5,7 @@
 
 module Main where
 
-import Prelude hiding (Num(..))
+import Prelude ((>>), ($), print, return, IO, Float, Int, Double)
 import Typed
 -- import Untyped
 -- import Data.Word
@@ -24,16 +24,25 @@ import Typed
 foo x = do
   print $ pp x
   print $ pp $ runEval x
-  
+
+f1 = proc "myproc" $ \(a :: E Int) -> a + a
+f2 = proc "myproc2" $ \(a :: E Int, b) -> a + (cast b)
+f3 = proc "myproc3" $ \(a, b :: E Float) -> f1 a - f2 (a, b)
+
 main :: IO ()
 main = do
   -- print tt
   -- foo $ fastpow 2 (3 :: E Int)
   -- foo $ fastpow (3 :: E Int) 2
   -- foo $ dbl (dbl (2 :: E Double))
-  compile $ dbl $ fastpow 2 (3 :: E Int)
+  -- compile $ dbl $ fastpow (var 0 :: E Int) (var 1)
   -- compile $ dbl (dbl (2 :: E Double))
-  
+  compile "mymodule"
+    [ def f1
+    , def f2
+    , def f3
+    ]
+
 -- main = compile $
 --   spctMain C1
   -- let arr :: E (V C4 Int) = vec [5 .. ] in

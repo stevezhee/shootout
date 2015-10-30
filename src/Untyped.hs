@@ -23,10 +23,12 @@ import Debug.Trace
 -- import           Control.Applicative hiding (empty)
 -- import           Control.Exception
 import Control.Monad.State hiding (mapM, sequence)
+import Control.Monad
 import qualified Data.HashMap.Strict as M
-import Data.List (sort)
+import Data.List (sort, intersperse, (\\), nub, union)
 --   hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr, concat)
 import Data.Maybe
+import Data.Char (toLower)
 -- import  Prelude
 --   hiding (lookup, elem, maximum, concatMap, mapM, sequence, foldr, concat)
 -- import Data.Array
@@ -44,6 +46,9 @@ import Data.Maybe
 -- import qualified LLVM.General.AST.Float as F
 -- import Data.Set (Set)
 -- import qualified Data.Set as S
+import Data.Vector (Vector)
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import Data.Foldable
 -- import Data.Bits
 import Data.Graph hiding (Tree, Node)
@@ -68,7 +73,7 @@ instance Functor Tree where
   fmap f = \case
     Leaf a -> Leaf $ f a
     Node ns -> Node $ fmap (fmap f) ns
-
+    
 -- llvmFunction :: (A.Type, String, [User], [BasicBlock]) -> Definition
 -- llvmFunction (t, n, us, bs) = GlobalDefinition functionDefaults
 --   { returnType = t
@@ -196,7 +201,7 @@ instance Functor Tree where
 --     TDouble -> F.Double $ fromRational a
 --     _ -> unused $ "llvmOperand:Rat:" ++ show t
 --   FVar a -> ref a
---   BVar a -> ref a
+--   BVar a -> ref a<
 --   UVar a -> ref a
 --   Undef a -> ConstantOperand $ C.Undef t
 --   where
@@ -219,10 +224,14 @@ instance Functor Tree where
 -- llvmBlock (Block a bs cs d) =
 --   BasicBlock (llvmName a) (map llvmPhi bs ++ map llvmInsn cs) (llvmTerminator d)
 
-
+instance PP Int where pp = PP.int
 instance PP a => PP [a] where pp = vcat . map pp
+-- instance PP a => PP (Set a) where pp xs = braces $ ppCommas $ map pp $ S.toList xs
+instance PP a => PP (Vector a) where pp xs = pp $ zip [0 :: Int ..] $ V.toList xs
 
 instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
+instance (PP a, PP b, PP c) => PP (a,b,c) where pp (a,b,c) = parens (pp a <+> pp b <+> pp c)
+                                        
 isBinop = flip elem [Add, Mul, Sub, Div, Rem, And, Or, Xor, Shl, Lshr, Ashr, Eq, Ne, Gt, Lt, Gte, Lte] . uop
 -- type NumBV = Integer
 
@@ -230,25 +239,31 @@ class Typed a where typeof :: a -> Type
 class PP a where pp :: a -> Doc
 
 data Type
-  = TSInt Integer | TUInt Integer | TFloating Integer | TAggregate | TVector Integer Type
+  = TSInt Integer | TUInt Integer | TFloating Integer | TVector Integer Type -- | TAggregate
   deriving (Show, Eq, Ord, Generic)
 instance Hashable Type
 
+instance PPC Type where
+  ppc = \case
+    TSInt a -> text "int" <> integer a <> text "_t"
+    TUInt a -> text "uint" <> integer a <> text "_t"
+    TFloating a -> text "float" <> integer a <> text "_t"
+    
 instance PP Double where pp = double
                          
 data Const
   = Rat Type Rational
-  | Undef Type
+  -- | Undef Type
   deriving (Show, Eq, Generic, Ord)
 instance Hashable Const
 instance PP Const where
   pp = \case
     Rat _ b -> pp b
-    Undef _ -> text "undef"
+    -- Undef _ -> text "undef"
 instance Typed Const where
   typeof = \case
     Rat a _ -> a
-    Undef a -> a
+    -- Undef a -> a
 
 instance Typed Float where typeof _ = TFloating 32
 instance Typed Double where typeof _ = TFloating 64
@@ -265,25 +280,22 @@ newtype Label = Label{ lid :: Integer } deriving (Show, Eq, Num, Ord, Generic, E
 instance Hashable Label
 instance PP Label where pp x = text "L" <> pp (lid x)
 
-data User = User{ utype :: Type, uid :: Integer } deriving (Show, Eq, Ord, Generic)
+data User = User{ uid :: Integer, utype :: Type } deriving (Show, Eq, Ord, Generic)
 instance Hashable User
 instance PP User where pp x = text "U" <> pp (uid x)
 instance Typed User where typeof = utype
 
-data Free = Free{ ftype :: Type, fid :: Integer } deriving (Show, Eq, Ord, Generic)
+data Free = Free{ fid :: Integer, ftype :: Type, fbvars :: [Var] } deriving (Show, Eq, Ord, Generic)
 instance Hashable Free
 instance PP Free where pp x = text "F" <> pp (fid x)
 instance Typed Free where typeof = ftype
   
-data Bound = Bound{ btype :: Type, blabel :: Maybe Label, bid :: Integer } deriving (Show, Eq, Ord, Generic)
+data Bound = Bound{ bid :: Integer, btype :: Type } deriving (Show, Eq, Ord, Generic)
 instance Hashable Bound
 instance Typed Bound where typeof = btype
-instance PP Bound where
-  pp (Bound _ m a) = text "B" <> d <> pp a
-    where
-      d = maybe PP.empty (\i -> pp (lid i) <> text ".") m
+instance PP Bound where pp x = text "B" <> pp (bid x)
 
-data Var
+data Var -- don't reorder
   = UVar User
   | BVar Bound
   | FVar Free
@@ -299,7 +311,31 @@ instance Typed Var where
     UVar a -> typeof a
     BVar a -> typeof a
     FVar a -> typeof a
+
+class PPC a where ppc :: a -> Doc
+
+instance PPC Const where ppc = pp
+
+instance PPC Free where ppc x = pp x <> parens (ppCommas $ map ppc $ fbvars x)
+  
+instance PPC Var where
+  ppc = \case
+    FVar a -> ppc a
+    x -> pp x
     
+instance PPC AExp where
+  ppc = \case
+    CAExp a -> ppc a
+    VAExp a -> ppc a
+      
+instance PPC a => PPC (Expr a) where
+  ppc = \case
+    AExp a -> ppc a
+    App a bs -> ppOpC a (map ppc bs)
+    Switch a bs c -> ppSwitchC (ppc a) (map ppc bs) (ppc c)
+    While _ a bs c -> ppWhileC (ppc a) [ (ppc (typeof p), (pp p, (ppc q, ppc r))) | (p, (q, r)) <- bs ] (pp c)
+    Proc (Defn a _ _) bs -> text a <+> parens (ppCommas $ map ppc bs)
+      
 data AExp
   = CAExp Const
   | VAExp Var
@@ -317,11 +353,18 @@ instance Typed AExp where
 app o t = Exp . App (Op o t)
 rat t = Exp . AExp . CAExp . Rat t
 
+
+data Defn a = Defn{ did :: String, dbvars :: [Var], body :: a } deriving (Show, Eq, Ord, Generic)
+instance Hashable (Defn AExp)
+
+instance Typed a => Typed (Defn a) where typeof = typeof . body
+                               
 data Expr a
   = AExp AExp
   | App Op [a]
   | Switch a [a] a
   | While Integer a [(Bound, (a, a))] Bound
+  | Proc (Defn a) [a]
   deriving (Show, Eq, Ord, Generic)
 instance Hashable (Expr AExp)
 
@@ -345,12 +388,13 @@ instance Typed a => Typed (Expr a) where
     App a _ -> typeof a
     Switch _ _ c -> typeof c
     While _ _ _ c -> typeof c
-
+    Proc a _ -> typeof a
+    
 data UOp
   = Add | Mul | Sub | Div | Rem | And | Or | Xor | Shl | Lshr | Ashr | Eq | Ne | Gt | Lt | Gte | Lte
   | Abs | Signum | Sqrt | ExpF | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh | Asinh | Atanh | Acosh
   | InsertElement | ExtractElement | ShuffleVector
-  | ToFP
+  | Cast
   deriving (Show, Eq, Ord, Generic)
 instance Hashable UOp
 instance PP UOp where
@@ -372,7 +416,7 @@ instance PP UOp where
     Lt -> "<"
     Gte -> ">="
     Lte -> "<="
-    x -> show x
+    x -> map toLower $ show x
 
 data Op = Op{ uop :: UOp, otype :: Type  } deriving (Show, Eq, Ord, Generic)
 instance Hashable Op
@@ -447,7 +491,7 @@ eval = \case
   AExp a -> case a of
     CAExp b -> case b of
       Rat _ r -> return r
-      Undef _ -> error "eval:undef"
+      -- Undef _ -> error "eval:undef"
     VAExp b -> gets env >>= return . fromMaybe (unused "eval:VAExp") . lookup b
   App a bs -> let f = fromMaybe (unused "eval:App") (lookup (uop a) $ optbl $ otype a) in mapM evalExp bs >>= return . f
   Switch a bs c -> do
@@ -484,7 +528,7 @@ zipWithTree f x y =
    (Leaf a, Leaf b) -> Leaf $ f a b
    (Node bs, Node cs) -> Node $ map (uncurry $ zipWithTree f) $ zip bs cs
    _ -> unused "zipWithTree"
-  
+
 listToTree :: [Tree a] -> Tree [a]
 listToTree xs@(b:_) = foldr (zipWithTree (:)) (fmap (\_ -> []) b) xs
 
@@ -502,11 +546,28 @@ while x f = fmap (Exp . (While (n+m) e $ sort $ toList $ zipTree xb $ zipTree x 
     (e, x1) = f x0
     x0 = fmap (Exp . bvar) xb
     xb =
-      snd $ mapAccumR (\(b:bs) j -> (bs, Bound (typeof j) Nothing b)) [n..] x
+      snd $ mapAccumR (\(b:bs) j -> (bs, Bound b (typeof j))) [n..] x
 
 bvar :: Bound -> Expr Exp
 bvar = AExp . VAExp . BVar
-    
+
+proc :: String -> Exp -> Tree Exp -> Exp
+proc s x e = Exp $ Proc (Defn s bvs x) $ toList e
+  where
+    bvs = [ v | Exp (AExp (VAExp v)) <- toList $ instantiate $ fmap typeof e ]
+
+instantiate :: Tree Type -> Tree Exp
+instantiate = snd . mapAccumL uvar 0
+
+uvar :: Integer -> Type -> (Integer, Exp)
+uvar x y = (succ x, Exp $ AExp $ VAExp $ UVar $ User x y)
+
+-- uvar :: User -> Expr Exp
+-- uvar = AExp . VAExp . UVar
+
+-- var :: Type -> Integer -> Exp
+-- var t = Exp . uvar . flip User t
+
 -- -- while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
 -- -- while xs f = fmap (\(v, _) -> EPhi v w) t
 -- --   -- ^ BAL: identify unused loop variables (remove(warning?) or error)
@@ -922,7 +983,10 @@ insertR b tbl = case lookupR b tbl of
 
 type F a = State (MapR Integer CExp) a
 
-foo x = toAExp x
+type Def = Defn Exp
+
+defToAExp :: Def -> F (Defn AExp)
+defToAExp (Defn a b c) = Defn a b <$> toAExp c
 
 toAExp :: Exp -> F AExp
 toAExp x0 = do
@@ -933,7 +997,7 @@ toAExp x0 = do
       tbl <- get
       let (a, tbl') = insertR x tbl
       modify $ \_ -> tbl'
-      return $ VAExp $ FVar $ Free (typeof x) a
+      return $ VAExp $ FVar $ Free a (typeof x) []
 
 toCExp :: Exp -> F CExp
 toCExp x = CExp <$> case toExpr x of
@@ -942,6 +1006,7 @@ toCExp x = CExp <$> case toExpr x of
   Switch a bs c -> Switch <$> toAExp a <*> mapM toAExp bs <*> toAExp c
   While a b cs d -> While a <$> toAExp b <*> mapM f cs <*> return d
     where f (p, (q, r)) = (,) p <$> ((,) <$> toAExp q <*> toAExp r)
+  Proc (Defn a bs c) ds -> Proc <$> (Defn a bs <$> toAExp c) <*> mapM toAExp ds
 
 -- cexp :: Exp -> M CExp
 -- cexp = \case
@@ -965,7 +1030,38 @@ toCExp x = CExp <$> case toExpr x of
 
 ppSwitch a bs c = vcat [text "switch" <+> ppParens a, nest 2 $ pp $ bs ++ [c]]
 
-ppParens :: (PP a, IsExpr a) => a -> Doc
+ppReturnC x = text "return" <+> x <> semi
+
+ppBlockC x ys = x $$ (nest 2 $ vcat [ text "{" $+$ (nest 2 $ vcat ys), text "}" ])
+
+ppAltC :: Doc -> Doc -> Doc
+ppAltC x y = hsep [ x <> colon, ppReturnC y ]
+ppCaseC :: (Int, Doc) -> Doc
+ppCaseC (x,y) = ppAltC (text "case" <+> PP.int x) y
+ppDefaultC :: Doc -> Doc
+ppDefaultC = ppAltC (text "default")
+ppSwitchC :: Doc -> [Doc] -> Doc -> Doc
+ppSwitchC x ys z = ppBlockC (text "switch" <> parens x) $ map ppCaseC (zip [0..] ys) ++ [ ppDefaultC z ]
+
+ppWhile a bs c =
+  vcat [ pp c <+> text "from"
+       , nest 2 $ vcat [ vcat $ map (\(p, (q, _)) -> ppStore p q) bs
+                       , text "while" <+> ppParens a
+                       , nest 2 $ vcat $ map (\(p, (_, r)) -> ppStore p r) bs
+                       ]
+       ]
+
+ppAssignC x y = x <+> text "=" <+> y <> semi
+
+ppVarDeclC x = ppc (typeof x) <+> ppc x
+
+ppWhileC a bs c =
+  vcat
+    [ vcat [ t <+> ppAssignC p q | (t, (p, (q, _))) <- bs ]
+    , ppBlockC (text "while" <> parens a) [ ppAssignC p r | (_, (p, (_, r))) <- bs ]
+    , ppReturnC c
+    ]
+    
 ppParens x = case toExpr x of
   AExp{} -> pp x
   _ -> parens $ pp x
@@ -984,10 +1080,22 @@ instance IsExpr CExp where
     App a bs -> App a $ map toExp bs
     Switch a bs c -> Switch (toExp a) (map toExp bs) (toExp c)
     While a b cs d -> While a (toExp b) [ (p, (toExp q, toExp r)) | (p, (q,r)) <- cs ] d
-
+    Proc (Defn a bs c) ds -> Proc (Defn a bs $ toExp c) $ map toExp ds
+    
 instance PP CExp where pp = pp . toExpr
 instance PP Exp where pp = pp . toExpr
-  
+
+ppCommas = hcat . intersperse (text ", ")
+
+ppOpC :: Op -> [Doc] -> Doc
+ppOpC x ys = ppReturnC $ case () of
+  () | isBinop x -> b0 <+> pp x <+> b1
+     | uop x == Cast -> parens (ppc (typeof x)) <> b0
+     | otherwise -> pp x <+> parens (ppCommas ys)
+  where
+    b0:_ = ys
+    _:b1:_ = ys
+
 instance (PP a, IsExpr a) => PP (Expr a) where
   pp = \case
     Switch a bs c -> ppSwitch a bs c
@@ -1001,13 +1109,7 @@ instance (PP a, IsExpr a) => PP (Expr a) where
         _:b1:_ = bs
         _:_:b2:_ = bs
     AExp a -> pp a
-    While _ a bs c ->
-      vcat [ pp c <+> text "from"
-           , nest 2 $ vcat [ vcat $ map (\(p, (q, _)) -> ppStore p q) bs
-                           , text "while" <+> ppParens a
-                           , nest 2 $ vcat $ map (\(p, (_, r)) -> ppStore p r) bs
-                           ]
-           ]
+    While _ a bs c -> ppWhile a bs c
     -- EPhi a b -> hsep [text "phi", pp a, ppParens b]
 
 -- instance (Foldable t, PP a) => PP (t a) where pp = pp . toList
@@ -1083,25 +1185,99 @@ data MapR a b = MapR
   
 -- type M a = State (MapR Integer CExp) a
 
-runCExpMap :: Exp -> (AExp, MapR Integer CExp)
-runCExpMap = flip runState (MapR M.empty 0) . toAExp
+instance PPC CExp where ppc = ppc . unCExp
 
-compile :: Exp -> IO ()
-compile x = do
-  -- print $ pp x -- this gets big very quickly due to redundancy
-  let (a,b) = runCExpMap x
-  let n = next b
-  let bs = map swap $ M.toList $ hmapR b
-  -- print $ pp a
-  -- print a
-  viz n bs
--- {-
---   let (us, bs) = runBlocks (maxBV x) a n bs
---   -- print $ pp bs
---   let blcks = map llvmBlock bs
---   -- print blcks
---   llvmAsm [(llvmTypeof $ fst a, "foo", us, blcks)]
--- -}
+ppCExpC :: (Free, CExp) -> Doc
+ppCExpC (x, y) = ppProcC (text "static") x (pp x) (fbvars x) y
+
+ppDefnC :: Defn AExp -> Doc
+ppDefnC x = ppProcC PP.empty x (text (did x)) (dbvars x) (body x)
+
+ppProcC pre x y zs a = ppBlockC (pre <+> ppc (typeof x) <+> y <> parens (ppCommas $ map ppVarDeclC zs)) [ppc a]
+
+runCExpMap :: [Def] -> ([Defn AExp], MapR Integer CExp)
+runCExpMap = flip runState (MapR M.empty 0) . mapM defToAExp
+
+updFBVarsCExp :: Vector [Var] -> CExp -> CExp
+updFBVarsCExp bvs x = CExp $ case unCExp x of
+  AExp a -> AExp $ f a
+  App a bs -> App a $ map f bs
+  Switch a bs c -> Switch (f a) (map f bs) (f c)
+  While a b cs d -> While a (f b) [ (p, (f q, f r)) | (p, (q, r)) <- cs ] d
+  Proc a bs -> Proc (updFBVarsDefn bvs a) (map f bs)
+  where
+    f = updFBVarsAExp bvs
+    
+updFBVarsAExp :: Vector [Var] -> AExp -> AExp
+updFBVarsAExp bvs = \case
+  VAExp (FVar a) -> VAExp $ FVar a{ fbvars = fidIdx bvs a }
+  x -> x
+  
+updFBVarsDefn :: Vector [Var] -> Defn AExp -> Defn AExp
+updFBVarsDefn bvs x = x{ body = updFBVarsAExp bvs $ body x }
+
+toFree :: Vector [Var] -> Integer -> Type -> Free
+toFree bvs i t = let v = Free i t $ fidIdx bvs v in v
+  
+compile :: String -> [Def] -> IO ()
+compile fn xs = do
+  -- print $ pp xs -- this gets big very quickly due to redundancy
+  let
+    (defns0, m) = runCExpMap xs
+    n = next m
+    cexps0 :: [(Integer, CExp)] = sort $ map swap $ M.toList $ hmapR m
+    bvs :: Vector [Var] = constructB argsCExp n cexps0
+    defns = map (updFBVarsDefn bvs) defns0
+    cexps = map (\(p, q) -> (toFree bvs p (typeof q), updFBVarsCExp bvs q)) cexps0
+
+  print $ vcat $ map ppCExpC cexps ++ map ppDefnC defns      
+
+singleton a = [a]
+
+fidIdx x y = V.unsafeIndex x $ fromIntegral $ fid y
+  
+argsAExp :: Vector [Var] -> AExp -> [Var]
+argsAExp arr = \case
+  VAExp v -> case v of
+    FVar a -> fidIdx arr a
+    _ -> singleton v
+  CAExp{} -> []
+
+argsCExp :: Vector [Var] -> CExp -> [Var]
+argsCExp arr x = sort $ nub $ case unCExp x of
+  AExp{} -> unused "argsCExp"
+  App _ bs -> go bs
+  Switch a bs c -> go (a : c : bs)
+  While _ a bs _ -> vs \\ map (BVar . fst) bs
+    where vs = go (a : concat [ [p, q] | (_, (p, q)) <- bs ])
+  Proc a bs -> dbvars a ++ go bs
+  where
+    go = foldr1 union . map (argsAExp arr)
+
+constructB :: (Vector a -> b -> a) -> Integer -> [(Integer, b)] -> Vector a
+constructB f n xs = V.create $ do
+  arr <- VM.new $ fromIntegral n
+  iarr <- V.unsafeFreeze arr
+  mapM_ (\(i,b) -> VM.unsafeWrite arr (fromIntegral i) (f iarr b)) xs
+  return arr
+
+--   
+--   let cs = map (\(p,q) -> (p, V.unsafeIndex bvs $ fromIntegral p, q)) bs
+--   print n
+--   print $ pp a
+--   print $ pp bs
+--   -- print $ pp bvs
+--   -- print $ pp cs
+-- --  print $ vcat $ map (ppFreeC bvs) bs ++ [ ppProcC bvs fn ? $  ]
+--   -- print a
+--   viz n bs
+-- -- {-
+-- --   let (us, bs) = runBlocks (maxBV x) a n bs
+-- --   -- print $ pp bs
+-- --   let blcks = map llvmBlock bs
+-- --   -- print blcks
+-- --   llvmAsm [(llvmTypeof $ fst a, "foo", us, blcks)]
+-- -- -}
 
 -- llvmAsm xs = do
 --   eab <- withContext $ \cxt ->
@@ -1121,6 +1297,7 @@ compile x = do
 --       , bvars = array (0, pred nbv) $ zip [0 .. pred nbv] $ repeat Nothing
 --       }
 
+{-
 depsAExp = \case
   VAExp (FVar a) -> Just $ fid a
   _ -> Nothing
@@ -1144,5 +1321,4 @@ viz n xs = do
   T.writeFile "t.dot" s
   _ <- system "dot -Gordering=out -Tsvg t.dot > t.dot.svg"
   return ()  
-
-singleton a = [a]
+-}
