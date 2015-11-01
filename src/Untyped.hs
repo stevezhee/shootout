@@ -214,14 +214,12 @@ data Expr a
   | While Integer a [(Bound, (a, a))] Bound
   | Proc (Defn a) [a]
   deriving (Show, Eq, Ord, Generic)
-instance Hashable (Expr AExp)
-
-newtype CExp = CExp{ unCExp :: Expr AExp } deriving (Show, Eq, Ord, Generic)
 instance Hashable CExp
+
+type CExp = Expr AExp
 newtype Exp = Exp{ unExp :: Expr Exp } deriving (Show, Eq, Ord)
 
 instance Typed Exp where typeof = typeof . unExp
-instance Typed CExp where typeof = typeof . unCExp
 
 instance Typed a => Typed (Expr a) where
   typeof = \case
@@ -421,7 +419,7 @@ toAExp x0 = do
       return $ VAExp $ FVar $ Free a (typeof x) []
 
 toCExp :: Exp -> F CExp
-toCExp x = CExp <$> case toExpr x of
+toCExp x = case toExpr x of
   AExp a -> return $ AExp a
   App a bs -> App a <$> mapM toAExp bs
   Switch a bs c -> Switch <$> toAExp a <*> mapM toAExp bs <*> toAExp c
@@ -476,7 +474,7 @@ toExp = Exp . AExp
 
 instance IsExpr Exp where toExpr = unExp
 instance IsExpr CExp where
-  toExpr x = case unCExp x of
+  toExpr x = case x of
     AExp a -> AExp a
     App a bs -> App a $ map toExp bs
     Switch a bs c -> Switch (toExp a) (map toExp bs) (toExp c)
@@ -520,8 +518,6 @@ data MapR a b = MapR
   , next :: a
   } deriving Show
 
-instance PPC CExp where ppc = ppc . unCExp
-
 ppCExpC :: (Free, CExp) -> Doc
 ppCExpC (x, y) = ppProcC (text "static") x (pp x) (fbvars x) y
 
@@ -534,7 +530,7 @@ runCExpMap :: [Def] -> ([Defn AExp], MapR Integer CExp)
 runCExpMap = flip runState (MapR M.empty 0) . mapM defToAExp
 
 updFBVarsCExp :: Vector [Var] -> CExp -> CExp
-updFBVarsCExp bvs x = CExp $ case unCExp x of
+updFBVarsCExp bvs x = case x of
   AExp a -> AExp $ f a
   App a bs -> App a $ map f bs
   Switch a bs c -> Switch (f a) (map f bs) (f c)
@@ -579,7 +575,7 @@ argsAExp arr = \case
   CAExp{} -> []
 
 argsCExp :: Vector [Var] -> CExp -> [Var]
-argsCExp arr x = sort $ nub $ case unCExp x of
+argsCExp arr x = sort $ nub $ case x of
   AExp{} -> unused "argsCExp"
   App _ bs -> go bs
   Switch a bs c -> go (a : c : bs)
