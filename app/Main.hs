@@ -25,9 +25,9 @@ foo x = do
   print $ pp x
   print $ pp $ runEval x
 
-f1 = proc "myproc" $ \(a :: E Int) -> a + a
-f2 = proc "myproc2" $ \(a :: E Int, b) -> a + (cast b)
-f3 = proc "myproc3" $ \(a, b :: E Float) -> f1 a - f2 (a, b)
+f1 = func "myfunc" $ \(a :: E Int) -> a + a
+f2 = func "myfunc2" $ \(a :: E Int, b) -> a + (cast b)
+f3 = func "myfunc3" $ \(a, b :: E Float) -> f1 a - f2 (a, b)
 
 main :: IO ()
 main = do
