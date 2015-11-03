@@ -19,7 +19,7 @@ import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..),
 import qualified Prelude as P
 -- import Data.Word
 -- import Data.List
-import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($), id, IO, undefined, (<$>), (<*>), (>>=), fromIntegral, return, String, (++), Either(..))
+import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($), id, IO, undefined, (<$>), (<*>), (>>=), fromIntegral, return, String, (++), Either(..), Maybe(..))
 import Control.Monad.State hiding (mapM, sequence)
 
 instance PP (E a) where pp = pp . unE
@@ -215,8 +215,13 @@ count = fromInteger . countof
 
 uerr s = P.error $ "user error:" ++ s
 
+extern :: (Agg a, Typed b) => String -> (a -> E b)
+extern s = mkdefn s (\_ -> Nothing)
+
 func :: (Agg a, Typed b) => String -> (a -> E b) -> (a -> E b)
-func s f = \a -> E $ U.func s (unE $ f a) $ unAgg a
+func s f = mkdefn s (Just . unE . f)
+
+mkdefn s f = \a -> let v = E $ U.defn s (typeof v) (f a) $ unAgg a in v
 
 def :: (Agg a, Typed b) => (a -> E b) -> Def
 def f = case unExp $ unE $ f instantiate of

@@ -28,7 +28,9 @@ foo x = do
 f1 = func "myfunc" $ \(a :: E Int) -> a + a
 f2 = func "myfunc2" $ \(a :: E Int, b) -> a + (cast b)
 f3 = func "myfunc3" $ \(a, b :: E Float) -> f1 a - f2 (a, b)
-
+f4 = extern "extfunc1" :: E Float -> E Double
+f5 = extern "extfunc2" :: (E Int, E Float) -> E Double
+  
 main :: IO ()
 main = do
   -- print tt
@@ -41,6 +43,8 @@ main = do
     [ def f1
     , def f2
     , def f3
+    , def f4
+    , def f5
     ]
 
 -- main = compile $
