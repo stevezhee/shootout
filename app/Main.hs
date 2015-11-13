@@ -5,8 +5,10 @@
 
 module Main where
 
-import Prelude ((>>), ($), print, return, IO, Float, Int, Double)
+import Prelude ((>>), ($), print, return, IO, Float, Int, Double, (.))
 import Typed
+import Eval
+import EvalSBV
 -- import Untyped
 -- import Data.Word
 
@@ -30,7 +32,9 @@ f2 = func "myfunc2" $ \(a :: E Int, b) -> a + (cast b)
 f3 = func "myfunc3" $ \(a, b :: E Float) -> f1 a - f2 (a, b)
 f4 = extern "extfunc1" :: E Float -> E Double
 f5 = extern "extfunc2" :: (E Int, E Float) -> E Double
-  
+
+fpint = func "fastpowint" $ \(a, b :: E Int) -> fastpow a b
+
 main :: IO ()
 main = do
   -- print tt
@@ -39,14 +43,22 @@ main = do
   -- foo $ dbl (dbl (2 :: E Double))
   -- compile $ dbl $ fastpow (var 0 :: E Int) (var 1)
   -- compile $ dbl (dbl (2 :: E Double))
-  compile "mymodule"
-    [ def f1
-    , def f2
-    , def f3
-    , def f4
-    , def f5
-    ]
-
+  let
+    t = compile "mymodule"
+      [
+        -- def fpint,
+        -- def $ func "fastpowint2" $ dbl . fpint
+        def $ func "foo" $ \(a :: E Int, b :: E Int) -> 12 == (if' (a < b) (if' (a == 12) (a + b) b) (if' (b < 14) a b))
+                                                        -- , def f1
+                                                        -- , def f2
+                                                        -- , def f3
+                                                        -- , def f4
+                                                        -- , def f5
+      ]
+  printC t
+  printPP t
+  sbv t
+  
 -- main = compile $
 --   spctMain C1
   -- let arr :: E (V C4 Int) = vec [5 .. ] in

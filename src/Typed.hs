@@ -9,13 +9,14 @@
 module Typed
   ( module Typed,
     PP(..),
-    ESt(..),
-    compile
+    compile,
+    printC,
+    printPP
   )
 where
 
 import qualified Untyped as U
-import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Const(..), AExp(..), PP(..), ESt(..), Expr(..), Def, compile)
+import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Lit(..), AExp(..), PP(..), Expr(..), Def, compile, printC, printPP)
 import qualified Prelude as P
 -- import Data.Word
 -- import Data.List
@@ -42,8 +43,6 @@ class (Typed a, Boolean b) => Cmp a b | a -> b where
 
 instance Boolean (E Bool) where
   -- ifThenElse 
-
-if' a b c = agg $ U.switch (unE a) [unAgg c] (unAgg b)
 
 instance Boolean Bool where
 --   ifThenElse = P.ifThenElse
@@ -229,7 +228,7 @@ def f = case unExp $ unE $ f instantiate of
   _ -> uerr "unable to create definition (not a procedure)"
 
 instantiate :: Agg a => a
-instantiate = let v = agg $ U.instantiate $ typeofAgg v in v
+instantiate = let v = agg $ fmap U.uvar $ U.instantiate $ typeofAgg v in v
 
 -- false :: E Bool
 -- false = E $ U.EAExp $ U.Int U.tbool 0
@@ -341,10 +340,8 @@ while :: Agg a => a -> (a -> (E Bool, a)) -> a
 while x f = agg $ U.while (unAgg x) g
   where g = \bs -> let (a, b) = f (agg bs) in (unE a, unAgg b)
 
-runEval = U.runEval . unE
-
--- if' :: Agg a => E Bool -> a -> a -> a
--- if' 
+if' :: Agg a => E Bool -> a -> a -> a
+if' a b c = agg $ U.switch (unE a) [unAgg c] (unAgg b)
 
 switch :: Agg a => E Word -> [a] -> a -> a
 switch a bs c = agg $ U.switch (unE a) (map unAgg bs) (unAgg c)

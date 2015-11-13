@@ -13,17 +13,19 @@
 
 module Untyped where
 
+import Prelude hiding (foldr, foldr1, mapM, mapM_, sequence, elem, maximum, concat)
 import Data.Hashable
 import GHC.Generics (Generic)
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint hiding (int, empty)
-import Data.Traversable
+import Data.Traversable hiding (mapM)
+import Data.Word
 
 import Debug.Trace
 -- import           Control.Applicative hiding (empty)
 -- import           Control.Exception
-import Control.Monad.State hiding (mapM, sequence)
-import Control.Monad
+import Control.Monad.State hiding ()
+import Control.Monad hiding ()
 import qualified Data.HashMap.Strict as M
 import Data.List (sort, intersperse, (\\), nub, union)
 --   hiding (insert, lookup, elem, maximum, concatMap, mapAccumR, foldr, concat)
@@ -49,14 +51,15 @@ import Data.Char (toLower)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
-import Data.Foldable
+import Data.Foldable hiding (mapM_)
 -- import Data.Bits
 import Data.Graph hiding (Tree, Node)
-import Data.GraphViz hiding (Int)
+-- import Data.GraphViz hiding (Int)
 import System.Process hiding (env)
 import qualified Data.Text.Lazy.IO as T
 import Data.Ratio
-import Data.Bifunctor
+import Control.Applicative
+-- import Data.Bifunctor
 
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
 
@@ -83,11 +86,6 @@ instance PP a => PP (Vector a) where pp xs = pp $ zip [0 :: Int ..] $ V.toList x
 instance (PP a, PP b) => PP (a,b) where pp (a,b) = parens (pp a <+> pp b)
 instance (PP a, PP b, PP c) => PP (a,b,c) where
   pp (a,b,c) = parens (pp a <+> pp b <+> pp c)
-                                        
-isBinop = either
-  (flip elem [ Add, Mul, Sub, Div, Rem, And, Or, Xor, Shl, Lshr
-             , Ashr, Eq, Ne, Gt, Lt, Gte, Lte ] . uop)
-  (\_ -> False)
 
 class Typed a where typeof :: a -> Type
 class PP a where pp :: a -> Doc
@@ -105,16 +103,16 @@ instance PPC Type where
     
 instance PP Double where pp = double
                          
-data Const
+data Lit
   = Rat Type Rational
   -- | Undef Type
   deriving (Show, Eq, Generic, Ord)
-instance Hashable Const
-instance PP Const where
+instance Hashable Lit
+instance PP Lit where
   pp = \case
     Rat _ b -> pp b
     -- Undef _ -> text "undef"
-instance Typed Const where
+instance Typed Lit where
   typeof = \case
     Rat a _ -> a
     -- Undef a -> a
@@ -130,10 +128,6 @@ instance PP Rational where
   pp x | denominator x == 1 = pp (numerator x)
        | otherwise = pp (fromRational x :: Double)
 
-newtype Label = Label{ lid :: Integer } deriving (Show, Eq, Num, Ord, Generic, Enum)
-instance Hashable Label
-instance PP Label where pp x = text "L" <> pp (lid x)
-
 data User = User{ uid :: Integer, utype :: Type } deriving (Show, Eq, Ord, Generic)
 instance Hashable User
 instance PP User where pp x = text "U" <> pp (uid x)
@@ -144,7 +138,7 @@ data Free = Free{ fid :: Integer, ftype :: Type, fbvars :: [Var] }
 instance Hashable Free
 instance PP Free where pp x = text "F" <> pp (fid x)
 instance Typed Free where typeof = ftype
-  
+
 data Bound = Bound{ bid :: Integer, btype :: Type } deriving (Show, Eq, Ord, Generic)
 instance Hashable Bound
 instance Typed Bound where typeof = btype
@@ -169,7 +163,7 @@ instance Typed Var where
 
 class PPC a where ppc :: a -> Doc
 
-instance PPC Const where ppc = pp
+instance PPC Lit where ppc = pp
 
 instance PPC Free where ppc x = pp x <> parens (ppCommas $ map ppc $ fbvars x)
   
@@ -180,10 +174,10 @@ instance PPC Var where
     
 instance PPC AExp where
   ppc = \case
-    CAExp a -> ppc a
+    LAExp a -> ppc a
     VAExp a -> ppc a
       
-instance (PPC a, Typed a) => PPC (Expr a) where
+instance (PPC a, Typed a, PP a) => PPC (Expr a) where
   ppc = \case
     AExp a -> ppc a
     App a bs -> ppAppC a bs
@@ -192,27 +186,26 @@ instance (PPC a, Typed a) => PPC (Expr a) where
                                        | (p, (q, r)) <- bs ] (pp c)
       
 data AExp
-  = CAExp Const
+  = LAExp Lit
   | VAExp Var
   deriving (Show, Eq, Generic, Ord)
 instance Hashable AExp
 instance PP AExp where
   pp = \case
-    CAExp a -> pp a
+    LAExp a -> pp a
     VAExp a -> pp a
 instance Typed AExp where
   typeof = \case
-    CAExp a -> typeof a
+    LAExp a -> typeof a
     VAExp a -> typeof a
 
-app o t = Exp . App (Left $ Op o t)
-rat t = Exp . AExp . CAExp . Rat t
-
-data Defn a = Defn{ did :: String, dbvars :: [Var], dtype :: Type, body :: Maybe a }
+data Defn a = Defn{ did :: String, dbvars :: [User], dtype :: Type, body :: Maybe a }
             deriving (Show, Eq, Ord, Generic)
 instance Hashable (Defn AExp)
 
 instance Typed (Defn a) where typeof = dtype
+
+instance PP a => PP (Defn a) where pp = text . did
                                
 data Expr a
   = AExp AExp
@@ -239,7 +232,7 @@ instance Typed a => Typed (Expr a) where
 data UOp
   = Add | Mul | Sub | Div | Rem | And | Or | Xor | Shl | Lshr | Ashr | Eq | Ne | Gt
   | Lt | Gte | Lte
-  | Abs | Signum | Sqrt | ExpF | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh
+  | Abs | Neg | Not | Signum | Sqrt | ExpF | Log | Sin | Cos | Asin | Atan | Acos | Sinh | Cosh
   | Asinh | Atanh | Acosh
   | InsertElement | ExtractElement | ShuffleVector
   | Cast
@@ -271,80 +264,12 @@ instance Hashable Op
 instance Typed Op where typeof = otype
 instance PP Op where pp = pp . uop
 
-binop :: (Rational -> Rational -> Rational) -> [Rational] -> Rational
-binop f = \case
-  [a,b] -> f a b
-  _ -> error "binop"
+isBinop = either
+  (flip elem [ Add, Mul, Sub, Div, Rem, And, Or, Xor, Shl, Lshr
+             , Ashr, Eq, Ne, Gt, Lt, Gte, Lte ] . uop)
+  (\_ -> False)
 
-debug x = trace ("debug:" ++ show x) x
-
-binopi :: (Integer -> Integer -> Integer) -> [Rational] -> Rational
-binopi f = \case
-  [a,b] -> toRational $ f (numerator a) (numerator b)
-  _ -> error "binop"
-
-binop2 :: Type -> (Rational -> Rational -> Rational) -> (Integer -> Integer -> Integer) -> [Rational] -> Rational
-binop2 t f g = case t of
-  TFloating{} -> binop f
-  _ -> binopi g
-
-cmpop :: (Rational -> Rational -> Bool) -> [Rational] -> Rational
-cmpop f = \case
-  [a,b] -> toRational $ fromEnum $ f a b
-  _ -> error "cmpop"
-
-frem = unused "frem"
-
-optbl :: Type -> [(UOp, [Rational] -> Rational)]
-optbl t =
-  (Add, binop (+)) :
-  (Sub, binop (-)) :
-  (Mul, binop (*)) :
-  (Div, binop2 t (/) div) :
-  (Rem, binop2 t frem rem) :
-  (Eq, cmpop (==)) :
-  (Ne, cmpop (/=)) :
-  (Lt, cmpop (<)) :
-  (Gt, cmpop (>)) :
-  (Lte, cmpop (<=)) :
-  (Gte, cmpop (>=)) :
-  []
-
-data ESt = ESt{ env :: [(Var, Rational)] } deriving Show
-
-instance PP ESt where pp = vcat . map pp . env
-
-type Eval a = State ESt a
-
-evalBound b e =
-  evalExp e >>= \v -> modify $ \st -> st{ env = [(BVar b, v)] ++ env st }
-
-evalExp = eval . toExpr
-
-eval :: Expr Exp -> Eval Rational
-eval = \case
-  AExp a -> case a of
-    CAExp b -> case b of
-      Rat _ r -> return r
-      -- Undef _ -> error "eval:undef"
-    VAExp b -> gets env >>= return . fromMaybe (unused "eval:VAExp") . lookup b
-  App (Left a) bs -> let f = fromMaybe (unused "eval:App") (lookup (uop a) $ optbl $ otype a) in mapM evalExp bs >>= return . f
-  Switch a bs c -> do
-    i <- evalExp a >>= return . fromInteger . numerator
-    evalExp $ if i < length bs then (bs !! i) else c
-  While _ a t c -> do
-    mapM_ (\(b, (e,_)) -> evalBound b e) t
-    let go = do
-          r <- evalExp a >>= return . toEnum . fromInteger . numerator
-          if r
-             then do
-               mapM_ (\(b, (_,e)) -> evalBound b e) t
-               go
-             else eval $ bvar c
-    go
-
-runEval :: Exp -> (Rational, ESt)
-runEval x = flip runState (ESt []) $ evalExp x
+isCast = either ((==) Cast . uop) (\_ -> False)
 
 maximumBV :: (Foldable t, Functor t) => t Exp -> Integer
 maximumBV = maximum . fmap maxBV
@@ -390,20 +315,23 @@ while x f =
 bvar :: Bound -> Expr Exp
 bvar = AExp . VAExp . BVar
 
-defn :: String -> Type -> Maybe Exp -> Tree Exp -> Exp
-defn s t x e = Exp $ App (Right $ Defn s bvs t x) $ toList e
-  where
-    bvs = [ v | Exp (AExp (VAExp v)) <- toList $ instantiate $ fmap typeof e ]
+app o t = Exp . App (Left $ Op o t)
+rat t = Exp . AExp . LAExp . Rat t
 
-instantiate :: Tree Type -> Tree Exp
-instantiate = snd . mapAccumL uvar 0
-
-uvar :: Integer -> Type -> (Integer, Exp)
-uvar x y = (succ x, Exp $ AExp $ VAExp $ UVar $ User x y)
+toExp = Exp . AExp
 
 tbool = TUInt 1
 
-swap (x,y) = (y,x)
+defn :: String -> Type -> Maybe Exp -> Tree Exp -> Exp
+defn s t x e = Exp $ App (Right $ Defn s bvs t x) $ toList e
+  where
+    bvs = toList $ instantiate $ fmap typeof e
+
+instantiate :: Tree Type -> Tree User
+instantiate = snd . mapAccumL user 0
+
+user :: Integer -> Type -> (Integer, User)
+user x y = (succ x, User x y)
 
 lookupR :: (Hashable b, Eq b) => b -> MapR a b -> Maybe a
 lookupR b = M.lookup b . hmapR
@@ -434,9 +362,6 @@ toAExp x0 = do
 
 toCExpDefn :: Defn Exp -> F (Defn AExp)
 toCExpDefn (Defn a bs c d) = Defn a bs c <$> mapM toAExp d
-
-foo :: Either Op (Defn Exp) -> Either (F Op) (F (Defn AExp))
-foo = bimap return toCExpDefn
 
 toCExp :: Exp -> F CExp
 toCExp x = case toExpr x of
@@ -494,28 +419,24 @@ ppStore x y = pp x <+> text ":=" <+> pp y
 class IsExpr a where
   toExpr :: a -> Expr Exp
 
-toExp = Exp . AExp
-
+instance IsExpr AExp where toExpr = AExp
 instance IsExpr Exp where toExpr = unExp
 instance IsExpr CExp where
   toExpr x = case x of
     AExp a -> AExp a
     App a bs ->
-      App (bimap id (\(Defn c ds t e) -> Defn c ds t $ fmap toExp e) a) $ map toExp bs
+      App (either Left (\(Defn c ds t e) -> Right $ Defn c ds t $ fmap toExp e) a) $ map toExp bs
     Switch a bs c -> Switch (toExp a) (map toExp bs) (toExp c)
     While a b cs d -> While a (toExp b) [ (p, (toExp q, toExp r))
                                         | (p, (q,r)) <- cs ] d
     
-instance PP CExp where pp = pp . toExpr
 instance PP Exp where pp = pp . toExpr
 
 ppCommas = hcat . intersperse (text ", ")
 
-isCast = either ((==) Cast . uop) (\_ -> False)
-
 instance (PP a, PP b) => PP (Either a b) where pp = either pp pp
                                             
-ppAppC :: (PPC a, Typed a) => Either Op (Defn a) -> [a] -> Doc
+ppAppC :: (PPC a, Typed a, PP a) => Either Op (Defn a) -> [a] -> Doc
 ppAppC x ys = ppReturnC $ case () of
   () | isBinop x -> b0 <+> pp x <+> b1
      | isCast x -> parens (ppc (typeof x)) <> b0
@@ -542,6 +463,7 @@ instance (PP a, IsExpr a) => PP (Expr a) where
     -- EPhi a b -> hsep [text "phi", pp a, ppParens b]
 
 unused = error . (++) "unused:"
+debug x = trace ("debug:" ++ show x) x
 
 data MapR a b = MapR
   { hmapR :: M.HashMap b a
@@ -551,13 +473,12 @@ data MapR a b = MapR
 ppCExpC :: (Free, CExp) -> Doc
 ppCExpC (x, y) = ppBlockC (ppCExpSigC x) [ppc y]
 
-instance PP (Defn a) where pp = text . did
-
 ppCExpSigC x = text "static" <+> ppSigC x (pp x) (fbvars x)
 
 ppSigC x y zs = ppc (typeof x) <+> y <> parens (ppCommas $ map ppVarDeclC zs)
 
-ppDefnSigC x = ppSigC x (pp x) (dbvars x)
+uvar = Exp . AExp . VAExp . UVar
+ppDefnSigC x = ppSigC x (text $ did x) (map UVar $ dbvars x)
 
 ppDefnDeclC x = ppDefnSigC x <> semi
 
@@ -572,7 +493,7 @@ runCExpMap = flip runState (MapR M.empty 0) . mapM defToAExp
 updFBVarsCExp :: Vector [Var] -> CExp -> CExp
 updFBVarsCExp bvs x = case x of
   AExp a -> AExp $ f a
-  App a bs -> App (bimap id (updFBVarsDefn bvs) a) $ map f bs
+  App a bs -> App (either Left (Right . updFBVarsDefn bvs) a) $ map f bs
   Switch a bs c -> Switch (f a) (map f bs) (f c)
   While a b cs d -> While a (f b) [ (p, (f q, f r)) | (p, (q, r)) <- cs ] d
   where
@@ -588,35 +509,48 @@ updFBVarsDefn bvs x = x{ body = fmap (updFBVarsAExp bvs) $ body x }
 
 toFree :: Vector [Var] -> Integer -> Type -> Free
 toFree bvs i t = let v = Free i t $ fidIdx bvs v in v
-  
-compile :: String -> [Def] -> IO ()
-compile fn xs = do
+
+ppDefnBody = maybe (text "extern") pp . body
+
+compile :: String -> [Def] -> ([(Free, CExp)], [Defn AExp])
+compile fn xs =
   -- print $ pp xs -- this gets big very quickly due to redundancy
   let
     (defns0, m) = runCExpMap xs
     n = next m
     cexps0 :: [(Integer, CExp)] = sort $ map swap $ M.toList $ hmapR m
     bvs :: Vector [Var] = constructB argsCExp n cexps0
-    defns = map (updFBVarsDefn bvs) defns0
-    cexps = map (\(p, q) -> (toFree bvs p (typeof q), updFBVarsCExp bvs q)) cexps0
+    defns :: [Defn AExp] = map (updFBVarsDefn bvs) defns0
+    cexps :: [(Free, CExp)] = map (\(p, q) -> (toFree bvs p (typeof q), updFBVarsCExp bvs q)) cexps0
 
-  print $ vcat $ map ppDefnDeclC defns ++ map ppCExpC cexps ++ map ppDefnC defns      
+  in (cexps, defns)
+
+printC :: ([(Free, CExp)], [Defn AExp]) -> IO ()
+printC (cexps, defns) = do
+  print $ vcat $ map ppDefnDeclC defns ++ map ppCExpC cexps ++ map ppDefnC defns
+
+printPP :: ([(Free, CExp)], [Defn AExp]) -> IO ()
+printPP (cexps, defns) = do
+  print $ vcat $ map pp cexps ++ map (\x -> parens (pp x <+> ppDefnBody x)) defns
+
+swap (x,y) = (y,x)
 
 singleton a = [a]
 
 fidIdx x y = V.unsafeIndex x $ fromIntegral $ fid y
-  
+uidIdx x y = V.unsafeIndex x $ fromIntegral $ uid y
+
 argsAExp :: Vector [Var] -> AExp -> [Var]
 argsAExp arr = \case
   VAExp v -> case v of
     FVar a -> fidIdx arr a
     _ -> singleton v
-  CAExp{} -> []
+  LAExp{} -> []
 
 argsCExp :: Vector [Var] -> CExp -> [Var]
 argsCExp arr x = sort $ nub $ case x of
   AExp{} -> unused "argsCExp"
-  App a bs -> either (\_ -> []) dbvars a ++ go bs
+  App a bs -> either (\_ -> []) (map UVar . dbvars) a ++ go bs
   Switch a bs c -> go (a : c : bs)
   While _ a bs _ -> vs \\ map (BVar . fst) bs
     where vs = go (a : concat [ [p, q] | (_, (p, q)) <- bs ])

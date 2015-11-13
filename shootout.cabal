@@ -15,8 +15,8 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Typed, Untyped
-  build-depends:       base >= 4.7 && < 5, hashable, pretty, monads-tf, containers, graphviz, text, process, unordered-containers, vector
+  exposed-modules:     Typed, Untyped, Eval, EvalSBV
+  build-depends:       base >= 4.7 && < 5, hashable, pretty, mtl, containers, graphviz, text, process, unordered-containers, vector, sbv
   default-language:    Haskell2010
 
 executable shootout-exe
