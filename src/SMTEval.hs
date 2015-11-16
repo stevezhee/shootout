@@ -17,7 +17,7 @@ satFree (x, _) = vcat
   [ sexp' "push" []
   , sexp' "assert" [cov x]
   , sexp' "check-sat" []
-  , sexp' "get-model" []
+  , sexp' "get-value" [text "(u0)"] -- BAL:
   , sexp' "pop" []
   ]
 
@@ -34,7 +34,7 @@ cmpUOp o a i =
 (.==) :: (PPSMT a, Typed a) => a -> Int -> Doc
 (.==) = cmpUOp Eq
 (.>=) = cmpUOp Gte
-         
+
 instance (PPSMT a, Typed a) => PPSMT (Expr a) where
   ppsmt x = case x of
     AExp a -> ppsmt a
@@ -62,24 +62,39 @@ defnFree (x,y) = defineConst (pp x) (pp $ typeof x) (ppsmt y)
 (.&) :: Doc -> Doc -> Doc
 (.&) x y = sexp' "and" [x,y]
 
-implies :: Doc -> AExp -> Doc
-implies x y = case y of
-  Right (FVar a) -> sexp' "assert" [sexp' "=>" [x, cov a]]
+implies :: Doc -> Doc -> Doc
+implies x y = sexp' "assert" [sexp' "=>" [x, y]]
+
+impliesAExp :: Doc -> AExp -> Doc
+impliesAExp x y = case y of
+  Right (FVar a) -> x `implies` cov a
   _ -> empty
-  
+
+impliesBranch :: Doc -> (Doc, AExp) -> Doc
+impliesBranch x (y,z) = vcat
+  [ declareBool y
+  , y `implies` x
+  , y `impliesAExp` z
+  ]
+      
 cov :: PP a => a -> Doc
 cov x = text "c" <> pp x
 
+covBranch :: PP a => a -> Int -> Doc
+covBranch x i = cov x <> text "!" <> int i
+
+declareBool x = declareConst x (text "Bool")
+  
 covFree :: (Free, CExp) -> Doc
 covFree (x,y) = vcat $
-  declareConst (cov x) (text "Bool") :
+  declareBool (cov x) :
   case y of
-    AExp a -> [cov x `implies` a]
-    App _ bs -> map (implies (cov x)) bs
+    AExp a -> [cov x `impliesAExp` a]
+    App _ bs -> map (impliesAExp (cov x)) bs
     Switch a bs c ->
-      cov x `implies` a :
-      (cov x .& (a .>= length bs)) `implies` c :
-      [ (cov x .& (a .== i)) `implies` b | (i,b) <- zip [0 ..] bs ]
+      cov x `impliesAExp` a :
+      (cov x .& (a .>= length bs)) `impliesBranch` (covBranch x $ length bs, c) :
+      [ (cov x .& (a .== i)) `impliesBranch` (covBranch x i, b) | (i,b) <- zip [0 ..] bs ]
 
 sexp = parens . hsep
 sexp' x ys = sexp (text x : ys)

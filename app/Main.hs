@@ -10,7 +10,7 @@ import Typed
 import Eval
 import SMTEval
 -- import Untyped
--- import Data.Word
+import Data.Word
 
 -- data C16 = C16
 -- instance Count C16 where ecountof _ = 16
@@ -48,10 +48,19 @@ main = do
       [
         -- def fpint,
         -- def $ func "fastpowint2" $ dbl . fpint
-        def $ func "foo" $ \(u1 :: E Int, u2 :: E Int) ->
-         if' ((u1 + u2) > 3)
-           (if' (u1 < 12) (u1 + 4) u2)
-           (if' (u2 > 42) 42 (if' (u1 < 12) (u1 + u2) (u1 + 4)))
+--        def $ func "foo" $ \(u0 :: E Word) -> switch u0 [7,8] (9 :: E Int)
+        def $ func "foo" $ \(u0 :: E Word) ->
+          if' (u0 > 42) 4 (if' (u0 < 10) (13 :: E Int) 5),
+        def $ func "bar" $ \(u0 :: E Int) ->
+          if' (u0 > 42) 4 (if' (u0 < 10) (13 :: E Int) 5)
+        -- def $ func "foo" $ \(u0 :: E Int) ->
+        -- if' (u0 > 42) 4 (if' (u0 < 10) (13 :: E Int) 5)
+        -- def $ func "foo" $ \(u1 :: E Int, u2 :: E Int) ->
+        -- if' (u1 > u2) (if' (u1 < 3) (13 :: E Int) 42) 5
+         -- if' ((u1 + u2) > 3)
+         --   (if' (u1 < 12)
+         -- (u1 + 4) u2)
+         --   (if' (u2 > 42) 42 (if' (u1 < 12) (u1 + u2) (u1 + 4)))
                                                         -- , def f1
                                                         -- , def f2
                                                         -- , def f3
