@@ -20,15 +20,15 @@ type Eval a = State ESt a
 evalBound b e =
   evalExp e >>= \v -> modify $ \st -> st{ env = [(BVar b, v)] ++ env st }
 
-evalExp = eval . toExpr
+evalExp = eval . unExp
 
 eval :: Expr Exp -> Eval Rational
 eval = \case
   AExp a -> case a of
-    LAExp b -> case b of
+    Left b -> case b of
       Rat _ r -> return r
       -- Undef _ -> error "eval:undef"
-    VAExp b -> gets env >>= return . fromMaybe (unused "eval:VAExp") . lookup b
+    Right b -> gets env >>= return . fromMaybe (unused "eval:VAExp") . lookup b
   App (Left a) bs -> let f = fromMaybe (unused "eval:App") (lookup (uop a) $ optbl $ otype a) in mapM evalExp bs >>= return . f
   Switch a bs c -> do
     i <- evalExp a >>= return . fromInteger . numerator

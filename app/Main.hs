@@ -8,7 +8,7 @@ module Main where
 import Prelude ((>>), ($), print, return, IO, Float, Int, Double, (.))
 import Typed
 import Eval
-import EvalSBV
+import SMTEval
 -- import Untyped
 -- import Data.Word
 
@@ -48,16 +48,19 @@ main = do
       [
         -- def fpint,
         -- def $ func "fastpowint2" $ dbl . fpint
-        def $ func "foo" $ \(a :: E Int, b :: E Int) -> 12 == (if' (a < b) (if' (a == 12) (a + b) b) (if' (b < 14) a b))
+        def $ func "foo" $ \(u1 :: E Int, u2 :: E Int) ->
+         if' ((u1 + u2) > 3)
+           (if' (u1 < 12) (u1 + 4) u2)
+           (if' (u2 > 42) 42 (if' (u1 < 12) (u1 + u2) (u1 + 4)))
                                                         -- , def f1
                                                         -- , def f2
                                                         -- , def f3
                                                         -- , def f4
                                                         -- , def f5
       ]
-  printC t
+  -- printC t
   printPP t
-  sbv t
+  print $ smtEval t
   
 -- main = compile $
 --   spctMain C1
