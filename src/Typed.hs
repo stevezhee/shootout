@@ -10,13 +10,12 @@ module Typed
   ( module Typed,
     PP(..),
     compile,
-    printC,
     printPP
   )
 where
 
 import qualified Untyped as U
-import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Lit(..), AExp(..), PP(..), Expr(..), Def, compile, printC, printPP)
+import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Lit(..), AExp(..), PP(..), CExpr(..), Def, compile, printPP)
 import qualified Prelude as P
 -- import Data.Word
 -- import Data.List
@@ -85,30 +84,14 @@ class Typed a => Floating a where
   log :: a -> a
   sin :: a -> a
   cos :: a -> a
-  asin :: a -> a
-  atan :: a -> a
-  acos :: a -> a
-  sinh :: a -> a
-  cosh :: a -> a
-  asinh :: a -> a
-  atanh :: a -> a
-  acosh :: a -> a
 
 instance Floating a => Floating (E a) where
   fromRational x = let v = E $ U.rat (typeof v) x in v
-  acosh = unop Acosh
-  atanh = unop Atanh
-  asinh = unop Asinh
   sqrt = unop Sqrt
-  exp = unop ExpF
-  log = unop Log
+  exp = unop ExpBaseE
+  log = unop LogBaseE
   sin = unop Sin
   cos = unop Cos
-  asin = unop Asin
-  atan = unop Atan
-  acos = unop Acos
-  sinh = unop Sinh
-  cosh = unop Cosh
 
 instance (Typed a, Arith a) => Arith (E a) where
   (*) = binop Mul
@@ -224,7 +207,7 @@ mkdefn s f = \a -> let v = E $ U.defn s (typeof v) (f a) $ unAgg a in v
 
 def :: (Agg a, Typed b) => (a -> E b) -> Def
 def f = case unExp $ unE $ f instantiate of
-  App (Right a) _ -> a
+  Right (App (Right a) _) -> a
   _ -> uerr "unable to create definition (not a procedure)"
 
 instantiate :: Agg a => a

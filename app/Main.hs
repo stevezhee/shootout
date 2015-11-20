@@ -9,6 +9,7 @@ import Prelude ((>>), ($), print, return, IO, Float, Int, Double, (.))
 import Typed
 import Eval
 import SMTEval
+import CEval
 -- import Untyped
 import Data.Word
 
@@ -28,7 +29,7 @@ foo x = do
   print $ pp $ runEval x
 
 f1 = func "myfunc" $ \(a :: E Int) -> a + a
-f2 = func "myfunc2" $ \(a :: E Int, b) -> a + (cast b)
+f2 = func "myfunc2" $ \(a :: E Int, b) -> a + cast b
 f3 = func "myfunc3" $ \(a, b :: E Float) -> f1 a - f2 (a, b)
 f4 = extern "extfunc1" :: E Float -> E Double
 f5 = extern "extfunc2" :: (E Int, E Float) -> E Double

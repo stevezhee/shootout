@@ -35,9 +35,8 @@ cmpUOp o a i =
 (.==) = cmpUOp Eq
 (.>=) = cmpUOp Gte
 
-instance (PPSMT a, Typed a) => PPSMT (Expr a) where
+instance (PPSMT a, Typed a) => PPSMT (CExpr a) where
   ppsmt x = case x of
-    AExp a -> ppsmt a
     App a bs -> sexp (either (ppsmtUOp (typeof $ head bs) . uop) pp a : map ppsmt bs)
     Switch a bs c ->
       foldr
@@ -45,8 +44,6 @@ instance (PPSMT a, Typed a) => PPSMT (Expr a) where
         (ppsmt c)
         (zip [0 ..] bs)
     -- While Integer a [(Bound, (a, a))] Bound
-
-    -- foldr :: Foldable t => (a -> b -> b) -> b -> t a -> b
 
 instance (PPSMT a, PPSMT b) => PPSMT (Either a b) where ppsmt = either ppsmt ppsmt
 instance PPSMT Var where ppsmt = pp
@@ -89,7 +86,6 @@ covFree :: (Free, CExp) -> Doc
 covFree (x,y) = vcat $
   declareBool (cov x) :
   case y of
-    AExp a -> [cov x `impliesAExp` a]
     App _ bs -> map (impliesAExp (cov x)) bs
     Switch a bs c ->
       cov x `impliesAExp` a :

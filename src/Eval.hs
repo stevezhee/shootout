@@ -13,7 +13,7 @@ import Typed (E(..))
 
 data ESt = ESt{ env :: [(Var, Rational)] } deriving Show
 
-instance PP ESt where pp = vcat . map pp . env
+instance PP ESt where pp = pp . env
 
 type Eval a = State ESt a
 
@@ -24,25 +24,26 @@ evalExp = eval . unExp
 
 eval :: Expr Exp -> Eval Rational
 eval = \case
-  AExp a -> case a of
+  Left a -> case a of
     Left b -> case b of
       Rat _ r -> return r
       -- Undef _ -> error "eval:undef"
     Right b -> gets env >>= return . fromMaybe (unused "eval:VAExp") . lookup b
-  App (Left a) bs -> let f = fromMaybe (unused "eval:App") (lookup (uop a) $ optbl $ otype a) in mapM evalExp bs >>= return . f
-  Switch a bs c -> do
-    i <- evalExp a >>= return . fromInteger . numerator
-    evalExp $ if i < length bs then (bs !! i) else c
-  While _ a t c -> do
-    mapM_ (\(b, (e,_)) -> evalBound b e) t
-    let go = do
-          r <- evalExp a >>= return . toEnum . fromInteger . numerator
-          if r
-             then do
-               mapM_ (\(b, (_,e)) -> evalBound b e) t
-               go
-             else eval $ bvar c
-    go
+  Right e -> case e of
+    App (Left a) bs -> let f = fromMaybe (unused "eval:App") (lookup (uop a) $ optbl $ otype a) in mapM evalExp bs >>= return . f
+    Switch a bs c -> do
+      i <- evalExp a >>= return . fromInteger . numerator
+      evalExp $ if i < length bs then (bs !! i) else c
+    While _ a t c -> do
+      mapM_ (\(b, (e,_)) -> evalBound b e) t
+      let go = do
+            r <- evalExp a >>= return . toEnum . fromInteger . numerator
+            if r
+               then do
+                 mapM_ (\(b, (_,e)) -> evalBound b e) t
+                 go
+               else eval $ bvar c
+      go
 
 runEval :: E a -> (Rational, ESt)
 runEval x = flip runState (ESt []) $ evalExp $ unE x
