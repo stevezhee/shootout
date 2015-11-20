@@ -131,8 +131,8 @@ count = fromInteger . countof
 
 -- class Counted a where countof :: a -> E Word
 
--- instance (Count c) => Counted (E (V c a)) where
---   countof (_ :: E (V c a)) = fromIntegral $ ecountof (unused "countof:E (V c a)" :: c)
+instance (Count c) => Count (E (V c a)) where
+  countof (_ :: E (V c a)) = undefined -- fromIntegral $ ecountof (unused "countof:E (V c a)" :: c)
 
 -- assert s b a = if b then a else error $ "assert:" ++ s
 

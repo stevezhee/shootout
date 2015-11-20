@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Typed, Untyped, Eval, SMTEval, CEval
+  exposed-modules:     Typed, Untyped, Eval, SMTEval, CEval, CBOR
   build-depends:       base >= 4.7 && < 5, hashable, pretty, mtl, containers, graphviz, text, process, unordered-containers, vector
   default-language:    Haskell2010
 

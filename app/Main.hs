@@ -12,6 +12,7 @@ import SMTEval
 import CEval
 -- import Untyped
 import Data.Word
+import CBOR
 
 -- data C16 = C16
 -- instance Count C16 where ecountof _ = 16
