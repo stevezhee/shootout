@@ -28,6 +28,7 @@ import qualified Data.Text.Lazy.IO as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import qualified Text.PrettyPrint as PP
+import Data.Int
 
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq)
 
@@ -85,9 +86,17 @@ instance Typed Lit where
 
 instance Typed Float where typeof _ = TFloating 32
 instance Typed Double where typeof _ = TFloating 64
-instance Typed Int where typeof _ = TInt True 32
+instance Typed Int where typeof _ = TInt True 32 -- BAL: make architecture dependent
+instance Typed Int8 where typeof _ = TInt True 8
+instance Typed Int16 where typeof _ = TInt True 16
+instance Typed Int32 where typeof _ = TInt True 32
+instance Typed Int64 where typeof _ = TInt True 64
 instance Typed Bool where typeof _ = TInt False 1 -- BAL: make general for enums
-instance Typed Word where typeof _ = TInt False 32
+instance Typed Word8 where typeof _ = TInt False 8
+instance Typed Word16 where typeof _ = TInt False 16
+instance Typed Word32 where typeof _ = TInt False 32
+instance Typed Word64 where typeof _ = TInt False 64
+instance Typed Word where typeof _ = TInt False 32 -- BAL: make architecture dependent
 
 instance PP Integer where pp = integer
 
@@ -164,7 +173,7 @@ data UOp
   = Add | Sub | Mul | Div | Rem
   | Shl | AShr | And | Or | Xor
   | ExtractElement | InsertElement | ShuffleVector
-  | Cast
+  | Cast | BitCast
   | Sqrt | Pow
   | Eq | Ne | Gt | Gte | Lt | Lte
   | Abs

@@ -8,6 +8,7 @@
 
 module Typed
   ( module Typed,
+    Typed,
     PP(..),
     compile,
     printPP
@@ -19,8 +20,10 @@ import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..),
 import qualified Prelude as P
 -- import Data.Word
 -- import Data.List
-import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($), id, IO, undefined, (<$>), (<*>), (>>=), fromIntegral, return, String, (++), Either(..), Maybe(..))
+import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($), id, IO, undefined, (<$>), (<*>), (>>=), fromIntegral, return, String, (++), Either(..), Maybe(..), Num)
 import Control.Monad.State hiding (mapM, sequence)
+import Data.Word
+import Data.Int
 
 instance PP (E a) where pp = pp . unE
   
@@ -67,7 +70,15 @@ instance Floating Double
 instance Floating Float
 instance Arith Double
 instance Arith Float
+instance Arith Int8
+instance Arith Int16
+instance Arith Int32
+instance Arith Int64
 instance Arith Word
+instance Arith Word8
+instance Arith Word16
+instance Arith Word32
+instance Arith Word64
 instance Arith Integer where
   fromInteger = id
   
@@ -101,6 +112,9 @@ instance (Typed a, Arith a) => Arith (E a) where
   (%) = binop Rem
   abs = unop Abs
   fromInteger x = let v = E $ U.rat (typeof v) (P.toRational x) in v
+
+negate :: Arith a => a -> a
+negate = (*) (-1)
 
 instance Cmp Float Bool
 instance Cmp Double Bool
@@ -224,7 +238,8 @@ instantiate = let v = agg $ fmap U.uvar $ U.instantiate $ typeofAgg v in v
 -- band :: (Typed a, Integral a) => E a -> E a -> E a
 -- band = binop And
 -- bor :: (Typed a, Integral a) => E a -> E a -> E a
--- bor = binop Or
+bor :: (Typed a, Arith a) => E a -> E a -> E a
+bor = binop Or
 -- xor :: (Typed a, Integral a) => E a -> E a -> E a
 -- xor = binop Xor
 -- lshr :: (Typed a, Integral a) => E a -> E a -> E a
@@ -232,7 +247,8 @@ instantiate = let v = agg $ fmap U.uvar $ U.instantiate $ typeofAgg v in v
 -- ashr :: (Typed a, Integral a) => E a -> E a -> E a
 -- ashr = binop Ashr
 -- shl :: (Typed a, Integral a) => E a -> E a -> E a
--- shl = binop Shl
+shl :: (Typed a, Arith a) => E a -> E a -> E a
+shl = binop Shl
 
 -- ne :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- ne = binop Ne
@@ -309,7 +325,10 @@ unop o x = app o [unE x]
 cast :: (Typed a, Typed b) => E a -> E b
 cast = unop Cast
 
--- instance (Num a, Typed a) => Num (E a) where
+bitcast :: (Typed a, Typed b) => E a -> E b
+bitcast = unop BitCast
+
+instance (Num a, Typed a) => Num (E a) where
 
 -- instance (Typed a, Integral a) => Integral (E a) where
 --   quotRem x y = (binop Quot x y, binop Rem x y) -- BAL: do these match llvm div, rem?
