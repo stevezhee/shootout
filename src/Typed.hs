@@ -11,6 +11,7 @@ module Typed
     Typed,
     PP(..),
     compile,
+    unused,
     printPP
   )
 where
@@ -18,7 +19,6 @@ where
 import qualified Untyped as U
 import Untyped (unused, Op(..), UOp(..), Type(..), Typed(..), Tree(..), Exp(..), Lit(..), AExp(..), PP(..), CExpr(..), Def, compile, printPP)
 import qualified Prelude as P
--- import Data.Word
 -- import Data.List
 import Prelude (Bool, Double, Int, Word, Float, Integer, Rational, fst, snd, (.), map, ($), id, IO, undefined, (<$>), (<*>), (>>=), fromIntegral, return, String, (++), Either(..), Maybe(..), Num)
 import Control.Monad.State hiding (mapM, sequence)
@@ -26,7 +26,7 @@ import Data.Word
 import Data.Int
 
 instance PP (E a) where pp = pp . unE
-  
+
 fastpow :: (Typed a, Arith a) => E a -> E a -> E a
 fastpow b e =
   snd $ while ((b, e), 1) $ \((b, e), r) ->
@@ -65,6 +65,9 @@ class Arith a where
   (%) :: a -> a -> a
   fromInteger :: Integer -> a
   abs :: a -> a
+
+lit :: Typed a => a -> E a
+lit = undefined
 
 instance Floating Double
 instance Floating Float
@@ -126,13 +129,14 @@ instance Typed a => Typed (E a) where
   typeof (_ :: E a) = typeof (unused "Typed (E a)" :: a)
   
 instance (Count c, Typed a) => Typed (V c a) where
-  typeof (_ :: V c a) =
-    TVector (countof (unused "Typed (V c a):c" :: c))
+  typeof (x :: V c a) =
+    TVector (countof x)
             (typeof (unused "Typed (V c a):a" :: a))
+  
+instance Count c => Count (V c a) where
+  countof (_ :: V c a) = countof (unused "Count (V c a)" :: c)
 
 data E a = E{ unE :: Exp }
-  
-data V c a
 
 -- class Typed a where etypeof :: a -> Type
 
@@ -145,8 +149,8 @@ count = fromInteger . countof
 
 -- class Counted a where countof :: a -> E Word
 
-instance (Count c) => Count (E (V c a)) where
-  countof (_ :: E (V c a)) = undefined -- fromIntegral $ ecountof (unused "countof:E (V c a)" :: c)
+-- instance (Count c) => Count (E (V c a)) where
+--   countof (_ :: E (V c a)) = undefined -- fromIntegral $ ecountof (unused "countof:E (V c a)" :: c)
 
 -- assert s b a = if b then a else error $ "assert:" ++ s
 
@@ -159,15 +163,14 @@ instance (Count c) => Count (E (V c a)) where
 --     f :: (Count c, Typed a) => c -> E (V c a)
 --     f c = assert "vec:length mismatch" (not (null bs) && length bs == cnt) $
 --           foldl' ins undef $ zip bs [0 .. ]
---       where
 --       cnt = fromIntegral $ ecountof c
 --       bs = take cnt xs
 
--- ex :: (Count c, Typed a) => E (V c a) -> E Word -> E a
--- ex = binop U.ExtractElement
+insert :: (Count c, Agg a) => V c a -> (a, E Word) -> V c a
+insert x (y, z) = undefined -- let v = V $ U.app U.InsertElement (typeof v) [unV x, unE y, unE z] in v
 
--- ins :: (Count c, Typed a) => E (V c a) -> (E a, E Word) -> E (V c a)
--- ins x (y, z) = ternop U.InsertElement x y z
+extract :: (Count c, Agg a) => V c a -> E Word -> a
+extract x y = undefined -- app U.ExtractElement [unV x, unE y]
 
 -- vupd :: (Count c, Typed a) => E (V c a) -> (E a -> E a, E Word) -> E (V c a)
 -- vupd x (f, z) = vupdi x (\_ -> f, z)
@@ -184,6 +187,10 @@ instance (Count c) => Count (E (V c a)) where
 --   ( i `lt` countof xs
 --   , (i + 1, vupdi xs (f, i))
 --   )
+
+
+vfoldr :: (Count c, Agg a, Agg b) => (a -> b -> b) -> b -> V c a -> b
+vfoldr f x arr = snd $ while (0, x) $ \(i, b) -> (i < count arr, (succ i, f (extract arr i) b))
 
 -- vfold :: (Count c, Typed a, Agg b) => (b -> E a -> b) -> b -> E (V c a) -> b
 -- vfold f = vfoldi $ \_ -> f
@@ -235,17 +242,16 @@ instantiate = let v = agg $ fmap U.uvar $ U.instantiate $ typeofAgg v in v
 
 -- eq :: (Typed a, Ord a) => E a -> E a -> E Bool
 -- eq = binop Eq
--- band :: (Typed a, Integral a) => E a -> E a -> E a
--- band = binop And
+band :: (Typed a, Arith a) => E a -> E a -> E a
+band = binop And
 -- bor :: (Typed a, Integral a) => E a -> E a -> E a
 bor :: (Typed a, Arith a) => E a -> E a -> E a
 bor = binop Or
 -- xor :: (Typed a, Integral a) => E a -> E a -> E a
 -- xor = binop Xor
--- lshr :: (Typed a, Integral a) => E a -> E a -> E a
--- lshr = binop Lshr
--- ashr :: (Typed a, Integral a) => E a -> E a -> E a
--- ashr = binop Ashr
+
+ashr :: (Typed a, Arith a) => E a -> E a -> E a
+ashr = binop AShr
 -- shl :: (Typed a, Integral a) => E a -> E a -> E a
 shl :: (Typed a, Arith a) => E a -> E a -> E a
 shl = binop Shl
@@ -280,6 +286,13 @@ instance Agg () where
   agg (Node []) = ()
   unAgg () = Node []
   typeofAgg _ = Node []
+
+data V c a = V{ unV :: Tree Exp }
+  
+instance (Agg a, Typed a, Count c) => Agg (V c a) where
+  agg = V
+  unAgg = unV
+  typeofAgg = undefined -- Leaf . typeof
   
 instance (Agg a, Agg b) => Agg (a, b) where
   agg (Node [a,b]) = (agg a, agg b)
@@ -337,6 +350,8 @@ instance (Num a, Typed a) => Num (E a) where
 -- instance (Typed a, Real a) => Real (E a) where toRational = unused "toRational"
 -- instance (Typed a, Ord a) => Ord (E a) where compare = unused "compare"
 -- instance (Typed a, Eq a) => Eq (E a) where (==) = unused "(==)"
+
+succ = (+) 1
 
 while :: Agg a => a -> (a -> (E Bool, a)) -> a
 while x f = agg $ U.while (unAgg x) g
