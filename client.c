@@ -5,7 +5,8 @@
 #include <netinet/in.h>
 #include <string.h>
 
-int ffi_connect()
+
+unsigned int ffi_connect(void)
 {
   int sock;
   struct sockaddr_in serverAddr;
@@ -14,7 +15,11 @@ int ffi_connect()
   /*---- Create the socket. The three arguments are: ----*/
   /* 1) Internet domain 2) Stream socket 3) Default protocol (TCP in this case) */
   sock = socket(PF_INET, SOCK_STREAM, 0);
-  
+
+  if(sock < 0)
+    {
+      exit(-1);
+    }
   /*---- Configure settings of the server address struct ----*/
   /* Address family = Internet */
   serverAddr.sin_family = AF_INET;
@@ -27,14 +32,30 @@ int ffi_connect()
 
   /*---- Connect the socket to the server using the address struct ----*/
   addr_size = sizeof serverAddr;
-  connect(sock, (struct sockaddr *) &serverAddr, addr_size);
+  if(!connect(sock, (struct sockaddr *) &serverAddr, addr_size))
+    {
+      exit(-1);
+    }
   return sock;
 }
 
-unsigned int ffi_recv(int sock, char *buffer, unsigned int count)
+unsigned int ffi_recv(unsigned int sock, unsigned int count, char *buffer)
 {
+  ssize_t ret;
+
   /*---- Read the message from the server into the buffer ----*/
-  return recv(sock, buffer, count, 0);
+  ret = recv(sock, buffer, count, 0);
+
+  if(ret == 0)
+    {
+      exit(0); // normal shutdown
+    }
+  if(ret < 0)
+    {
+      exit(-1);
+    }
+  
+  return ret;
 }
 
 int main(){
@@ -43,7 +64,7 @@ int main(){
 
   sock = ffi_connect();
 
-  unsigned int n = ffi_recv(sock, buffer, sizeof(buffer));
+  unsigned int n = ffi_recv(sock, sizeof(buffer), buffer);
   /*---- Print the received message ----*/
   printf("Data received(%d): %s", n, buffer);   
 

@@ -2,10 +2,11 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TupleSections #-}
 
 module CBOR where
 
-import Prelude ((>>), ($), print, return, IO, Float, Int, Double, (.), Functor(..), Applicative(..), Monad(..), undefined, Bool, Num, snd, flip, Enum)
+import Prelude ((>>), ($), print, return, IO, Float, Int, Double, (.), Functor(..), Applicative(..), Monad(..), undefined, Bool, Num, fst, snd, flip, Enum)
 
 import Control.Monad (foldM)
 import Data.Word
@@ -19,6 +20,72 @@ import Control.Monad.State
 
 type M a = StateT (E Word32) IO a
 
+newtype IO' a = IO'{ unIO' :: World -> (a, World) }
+
+data Ptr a
+
+instance Typed a => Typed (Ptr a)
+
+alloc :: Typed a => IO' (E (Ptr a))
+alloc = mkIO' $ extern "ffi_alloc" ()
+
+load :: Typed a => E (Ptr a) -> IO' (E a)
+load x = mkIO' $ extern "load" x
+
+store :: E a -> E (Ptr a) -> IO' ()
+store a p = undefined
+
+-- connect :: IO' (E Socket)
+-- connect = IO' $ \w -> alloc $ \p -> let w' = f (p, w) in (load p w', w')
+--  where f =
+
+connect :: IO' (E Socket)
+connect = mkIO' $ ffi_connect ()
+
+ffi_connect = extern "ffi_connect" :: () -> E Socket
+
+recv :: Count c => E Socket -> E Word -> IO' (E Word, E (V c Word8))
+recv sock n = do
+  p <- alloc
+  m <- mkIO' $ ffi_recv (sock, n, p)
+  a <- load p
+  return (m, a)
+  
+ffi_recv  :: Count c => (E Socket, E Word, E (Ptr (V c Word8))) -> E Word
+ffi_recv = extern "ffi_recv"
+
+new :: Typed a => E a -> IO' (E (Ptr a))
+new a = alloc >>= \p -> store a p >> return p
+
+send :: Count c => E Socket -> E Word -> E (V c Word8) -> IO' (E Word)
+send sock n a = do
+  p <- new a
+  mkIO' $ ffi_send (sock, n, p)
+  
+ffi_send :: Count c => (E Socket, E Word, E (Ptr (V c Word8))) -> E Word
+ffi_send = extern "ffi_send"
+
+ffi_accept :: () -> E Socket
+ffi_accept = extern "ffi_accept"
+
+mkIO' a = IO' $ \w -> (a, succ w)
+
+type Socket = Word
+type World = E Word
+
+evalIO' :: IO' a -> (World -> a)
+evalIO' m = fst . unIO' m
+  
+instance Applicative IO' where
+  pure  = IO' . (,)
+  m <*> n = IO' $ \w -> let (f, w') = unIO' m w in let (a, w'') = unIO' n w' in (f a, w'')
+    
+instance Functor IO' where
+  fmap f m = IO' $ \w -> let (a, w') = unIO' m w in (f a, w')
+    
+instance Monad IO' where
+  m >>= f = IO' $ \w -> let (a, w') = unIO' m w in let IO' g = f a in g w'
+    
 blarg :: (Count c, Agg b) => V c a -> b -> (E Word -> b -> b) -> b
 blarg arr x f = snd $ while (0, x) $ \(i, a) -> (i < count arr, (succ i, f i a))
 
@@ -41,7 +108,6 @@ traverse_ f arr = undefined
 put8 :: E Word8 -> M ()
 put8 = undefined
 
-type World = E Word
 -- put8' :: E Word8 -> M ()
 put8' :: (Count c) =>
   E Word8 -> (V c (E Word8) -> World -> World) -> (V c (E Word8), (E Word, World)) ->
