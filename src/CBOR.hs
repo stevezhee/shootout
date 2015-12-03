@@ -72,19 +72,6 @@ mkIO' a = IO' $ \w -> (a, succ w)
 
 type Socket = Word
 type World = E Word
-
-evalIO' :: IO' a -> (World -> a)
-evalIO' m = fst . unIO' m
-  
-instance Applicative IO' where
-  pure  = IO' . (,)
-  m <*> n = IO' $ \w -> let (f, w') = unIO' m w in let (a, w'') = unIO' n w' in (f a, w'')
-    
-instance Functor IO' where
-  fmap f m = IO' $ \w -> let (a, w') = unIO' m w in (f a, w')
-    
-instance Monad IO' where
-  m >>= f = IO' $ \w -> let (a, w') = unIO' m w in let IO' g = f a in g w'
     
 blarg :: (Count c, Agg b) => V c a -> b -> (E Word -> b -> b) -> b
 blarg arr x f = snd $ while (0, x) $ \(i, a) -> (i < count arr, (succ i, f i a))
