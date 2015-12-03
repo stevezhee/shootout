@@ -111,5 +111,5 @@ offset_momentum xs@(x : _) = (vx_ (f vx) $ vy_ (f vy) $ vz_ (f vz) x) : tail xs
   where
     f g = \_ -> -((sum $ map (\bdy -> g bdy * mass bdy) xs) / solar_mass)
 
-nbody :: Int' -> Double'
-nbody = func "nbody" $ \n -> energy $ reps n (offset_momentum bodies) (advance 0.01)
+nbody :: Word' -> IO' ()
+nbody = proc "nbody" $ \n -> putd $ energy $ reps n (offset_momentum bodies) (advance 0.01)

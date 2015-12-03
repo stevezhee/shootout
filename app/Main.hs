@@ -7,23 +7,8 @@ module Main where
 
 import Shoot
 import Fannkuch
-
-putln :: IO' ()
-putln = putc $ ord' '\n'
-
-puti :: Int' -> IO' ()
-puti = externIO "puti"
-
-putc :: Word8' -> IO' ()
-putc = externIO "putc"
-
-fk :: Int' -> IO' ()
-fk = proc "fannkuchredux" $ \n -> do
-  let (max_flips, checksum) = fkMain n
-  puti checksum
-  putln
-  puti max_flips
-  putln
+import NBody
+import Spectral
 
 main = do
   print $ pp $ compile
@@ -31,11 +16,33 @@ main = do
     --      puti 42
     --      puti 27
     --      puti 39
-    -- [ defIO fk
-    -- [ defIO $ proc "factorial" (puti . factorial)
-    [ def $ func "factorial" $ \(i :: Int') -> factorial i
+    -- [ def $ func "foo" $ \() -> 42 :: Int' -- BAL: incorrect
+    -- [ def $ func "foo" $ \x -> x + 42 :: Int'
+    -- [ def $ func "foo" $ \(x,y) -> x + y :: Int'
+    -- [ def $ func "foo" $ \x -> switch x [] x :: Word'
+    -- [ def $ func "foo" $ \x -> switch x [42] x :: Word'
+    -- [ def $ func "foo" $ \(x,y) -> switch x [42,y] x :: Word'
+    [
+      -- def $ func "foo" $ \(x :: Word') -> while 0 $ \i -> (i < x, succ i)
+      -- def $ func "foo" $ \(x :: Word', y) -> fastpow x y
+      -- def $ func "foo" $ \(x :: Word') -> spctMain C1
+      -- def $ func "foo" $ \(x :: Word') -> negate x -- the wrong definition of negate will make this loop
+      -- def $ func "foo" $ \(x :: Word') -> reps 3 x (+ 1)
+      -- def $ func "factorial" $ \(i :: Int') -> factorial i
+      -- defIO $ proc "factorial" (puti . factorial)
+      -- defIO fannkuchredux
+      -- defIO nbody
+      def $ func "spectral" $ \(x :: Word') -> spctMain C1
     ]
-    
+
+data C1 = C1
+instance Count C1 where countof _ = 1
+                        
+fastpow :: (Agg a, Arith a, Cmp a Bool') => a -> a -> a
+fastpow b e =
+  while_ ((b, e), 1) $ \((b, e), r) ->
+    (e > 0, ((b * b, e / 2), if' ((e % 2) /= 0) (r * b) r))
+
 -- import Prelude ((>>), ($), print, return, IO, Float, Int, Double, (.))
 -- import Typed
 -- import Eval

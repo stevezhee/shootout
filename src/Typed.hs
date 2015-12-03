@@ -135,7 +135,13 @@ while x f = agg $ U.while (unAgg x) g
 if' :: Agg a => Bool' -> a -> a -> a
 if' a b c = switch (zext a) [c] b
 
-zext :: (Atom a, Agg a, Atom b) => a -> b -- BAL: bits of b > bits of a
+wtod :: Word' -> Double'
+wtod = uitofp
+
+uitofp :: (Atom a, Agg a, Atom b) => a -> b -- a is word and b is floating
+uitofp = extern "uitofp"
+
+zext :: (Atom a, Agg a, Atom b) => a -> b -- bits of b > bits of a
 zext = extern "zext"
 
 insert :: (Count c, Atom a, Agg a) => Array c a -> a -> Word' -> Array c a
@@ -167,11 +173,6 @@ true = lit 1
 
 count :: Count c => c -> Word'
 count = lit . fromIntegral . countof
-
--- fastpow :: (Typed a, Arith a) => E a -> E a -> E a
--- fastpow b e =
---   snd $ while ((b, e), 1) $ \((b, e), r) ->
---     (e > 0, ((b * b, e / 2), if' ((e % 2) /= 0) (r * b) r))
 
 -- assert s b a = if b then a else error $ "assert:" ++ s
 

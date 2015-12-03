@@ -68,3 +68,11 @@ fkMain n =
     )
   where
     perm0 = (0xfedcba987654321, (0x1111111111111111, 2))
+
+fannkuchredux :: Int' -> IO' ()
+fannkuchredux = proc "fannkuchredux" $ \n -> do
+  let (max_flips, checksum) = fkMain n
+  puti checksum
+  putln
+  puti max_flips
+  putln

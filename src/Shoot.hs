@@ -17,6 +17,7 @@ import Typed
 import qualified Prelude as P
 
 instance Arith Int where arithRec = arithRecIntegral
+instance Arith Integer where arithRec = arithRecIntegral
 instance Arith Int' where arithRec = arithRecAtom
 instance Arith Word' where arithRec = arithRecAtom
 instance Arith Word32' where arithRec = arithRecAtom
@@ -140,9 +141,6 @@ fromInteger = _fromInteger arithRec
 abs :: Arith a => a -> a
 abs = _abs arithRec
 
-negate :: Arith a => a -> a
-negate = (*) (-1)
-
 (==) :: Cmp a b => a -> a -> b
 (==) = _eq cmpRec
 
@@ -164,15 +162,16 @@ negate = (*) (-1)
 sum :: (Foldable f, Arith a) => f a -> a
 sum = foldr (+) 0
 
-reps :: (Agg a, Agg b, Cmp a Bool', Arith a) => a -> b -> (b -> b) -> b
+reps :: (Agg a) => Word' -> a -> (a -> a) -> a
 reps n b f = repsi n b $ \_ -> f
 
-repsi :: (Agg a, Agg b, Cmp a Bool', Arith a) => a -> b -> (a -> b -> b) -> b
+repsi :: (Agg a) => Word' -> a -> (Word' -> a -> a) -> a
 repsi n b f = while_ (n, b) $ \(i, b) ->
   ( i > 0
   , let i' = pred i in (i', f i' b)
   )
 
+while_ :: (Agg a, Agg b) => (a, b) -> ((a, b) -> (Bool', (a, b))) -> b
 while_ x = snd . while x
   
 unfoldi :: (Count c, Atom a, Agg a, Agg b) => (Word' -> b -> (a, b)) -> b -> (b, Array c a)
@@ -182,11 +181,18 @@ unfoldi f b0 = repsi (count arr0) (b0, arr0) $ \i (b, arr) -> let (a,b') = f i b
 unfoldi_ :: (Count c, Atom a, Agg a) => (Word' -> a) -> Array c a
 unfoldi_ f = snd $ unfoldi (\i () -> (f i, ())) ()
 
+foldi :: (Count c, Atom a, Agg a, Agg b) =>
+  (Word' -> b -> a -> b) -> b -> Array c a -> b
+foldi f x0 arr = repsi (count arr) x0 $ \i x -> f i x $ extract arr i
+
 repeatc :: (Count c, Atom a, Agg a) => a -> Array c a
 repeatc = unfoldi_ . const
 
 succ :: Arith a => a -> a
 succ = (+) 1
+
+negate :: Arith a => a -> a
+negate = (-) 0 -- If you define this as (*) (-1) then you get an infinite loop
 
 pred :: Arith a => a -> a
 pred = (+) (-1)
@@ -199,3 +205,15 @@ min' x y = if' (x < y) x y
 
 ord' :: Char -> Word8'
 ord' = lit . fromIntegral . fromEnum
+
+putln :: IO' ()
+putln = putc $ ord' '\n'
+
+puti :: Int' -> IO' ()
+puti = externIO "puti"
+
+putd :: Double' -> IO' ()
+putd = externIO "putd"
+
+putc :: Word8' -> IO' ()
+putc = externIO "putc"
