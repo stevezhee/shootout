@@ -10,8 +10,10 @@ import Fannkuch
 import NBody
 import Spectral
 
+factorialF = func "factorialF" $ \(i :: Int') -> factorial i
 main = do
-  print $ pp $ compile
+  let
+   a = compile
     -- [ defIO $ proc "foo" $ \() -> do
     --      puti 42
     --      puti 27
@@ -28,16 +30,26 @@ main = do
       -- def $ func "foo" $ \(x :: Word') -> spctMain C1
       -- def $ func "foo" $ \(x :: Word') -> negate x -- the wrong definition of negate will make this loop
       -- def $ func "foo" $ \(x :: Word') -> reps 3 x (+ 1)
-      -- def $ func "factorial" $ \(i :: Int') -> factorial i
-      -- defIO $ proc "factorial" (puti . factorial)
+      --defIO $ proc "add1" $ \(x,y) -> puti (x + y)
+      -- def $ func "asdf" $ \(x :: Int', y :: Int') -> x + y
+--      defIO $ proc "asdf" puti
+--      defIO $ \x -> puti (1 + x)
+      def $ func "asdf" $ \(x :: Int') -> dbl $ dbl (x + 1)
+--      def factorialF
+      -- defIO $ proc "factoriala" $ \x -> puti $ factorialF x,
+      -- defIO $ proc "factorial" (puti . factorialF)
       -- defIO fannkuchredux
       -- defIO nbody
-      def $ func "spectral" $ \(x :: Word') -> spctMain C1
+      -- def $ func "spectral" $ \(x :: Word') -> spctMain C1
     ]
-
+  -- print a
+  printPP a
+  
 data C1 = C1
 instance Count C1 where countof _ = 1
-                        
+
+dbl x = x + x
+
 fastpow :: (Agg a, Arith a, Cmp a Bool') => a -> a -> a
 fastpow b e =
   while_ ((b, e), 1) $ \((b, e), r) ->

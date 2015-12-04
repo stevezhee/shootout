@@ -79,12 +79,6 @@ unAtom = _unAtom atomRec
 
 typeofAtom :: Atom a => a -> Type
 typeofAtom = _typeofAtom atomRec
-  
-extern :: (Agg a, Atom b) => String -> a -> b
-extern s = mkdefn s (\_ -> Nothing)
-
-externIO :: Agg a => String -> a -> IO' ()
-externIO s = \a -> IO' $ \w -> ((), extern s (a, w))
 
 func :: (Agg a, Atom b) => String -> (a -> b) -> a -> b
 func s f = mkdefn s (Just . unAtom . f)
@@ -92,21 +86,29 @@ func s f = mkdefn s (Just . unAtom . f)
 mkdefn :: (Atom a, Agg b) => String -> (b -> Maybe Untyped.Exp) -> b -> a
 mkdefn s f = \a -> let v = atom $ U.defn s (typeofAtom v) (f a) $ unAgg a in v
            
-type World = Word'
+newtype World = World{ unWorld :: Exp }
+instance Atom World where atomRec = AtomRec World unWorld $ \_ -> TWorld
+instance Agg World where aggRec = fromAtomRec
 
-proc :: (Agg a) => String -> (a -> IO' ()) -> (a -> IO' ())
-proc s f = \a -> IO' $ \w -> ((), func s (execIO' $ f a) w)
+proc :: Agg a => String -> (a -> IO' ()) -> (a -> IO' ())
+proc s f = \a0 -> IO' $ \w0 -> ((), (func s $ \(a, w) -> snd (unIO' (f a) w)) (a0, w0))
+
+extern :: (Agg a, Atom b) => String -> a -> b
+extern s = mkdefn s (\_ -> Nothing)
+
+externIO :: Agg a => String -> a -> IO' ()
+externIO s = \(a0 :: a) -> IO' $ \w0 -> ((), (extern s :: (a, World) -> World) (a0, w0))
 
 defIO :: (Agg a) => (a -> IO' ()) -> Def
-defIO f = def $ \(a, w) -> execIO' (f a) w
+defIO f = def $ \(a, w) -> snd (unIO' (f a) w)
 
 def :: (Agg a, Atom b) => (a -> b) -> Def
 def f = case unExp $ unAtom $ f instantiate of
-  Right (App a _) -> a
-  _ -> uerr "unable to create definition (not a procedure)"
+  Right (App a _) | body a /= Nothing -> a
+  _ -> uerr "unable to create definition (not a definition)"
 
 execIO' :: IO' () -> World -> World
-execIO' m = \w -> snd $ unIO' m w
+execIO' m = snd . unIO' m
 
 newtype IO' a = IO'{ unIO' :: World -> (a, World) }
 
@@ -123,7 +125,7 @@ instance Monad IO' where
 uerr s = error $ "user error:" ++ s
 
 instantiate :: Agg a => a
-instantiate = let v = agg $ fmap U.uvar $ U.instantiate $ typeofAgg v in v
+instantiate = let v = agg $ fmap var $ U.instantiate $ typeofAgg v in v
 
 switch :: (Agg a) => Word' -> [a] -> a -> a
 switch a bs c = agg $ U.switch (unWord' a) (map unAgg bs) (unAgg c)
@@ -240,40 +242,3 @@ instance (Agg a) => Agg [a] where
     , _unAgg = Node . map unAgg
     , _typeofAgg = \(_ :: [a]) -> Node [ typeofAgg (unused "Agg [a]" :: a) ]
     }
-
--- emax x y = eif (x `gte` y) x y
-
--- cast :: (Typed a, Typed b) => E a -> E b
--- cast = unop Cast
-
--- bitcast :: (Typed a, Typed b) => E a -> E b
--- bitcast = unop BitCast
-
--- instance (Num a, Typed a) => Num (E a) where
-
--- instance (Typed a, Integral a) => Integral (E a) where
---   quotRem x y = (binop Quot x y, binop Rem x y) -- BAL: do these match llvm div, rem?
---   toInteger = unused "toInteger"
-
--- instance (Typed a, Real a) => Real (E a) where toRational = unused "toRational"
--- instance (Typed a, Ord a) => Ord (E a) where compare = unused "compare"
--- instance (Typed a, Eq a) => Eq (E a) where (==) = unused "(==)"
-
--- switch :: Agg a => E Word -> [a] -> a -> a
--- switch a bs c = agg $ U.switch (unE a) (map unAgg bs) (unAgg c)
-
--- instance (Typed a, Enum a, Num a) => Enum (E a) where
---   toEnum = fromInteger . fromIntegral
---   fromEnum x = case unE x of
---     EAExp (CAExp (Int _ i)) -> fromInteger i
---     _ -> unused "Enum (E a):fromEnum"
-
--- fastpow :: (Typed a, Typed b, Num a, Integral b, Ord b, Real b) => E a -> E b -> E a
--- fastpow b e =
---   snd $ while ((b, e), 1) $ \((b, e), r) ->
---     (e `gt` 0, ((b * b, e `div'` 2), eif ((e `mod'` 2) `ne` 0) (r * b) r))
-
--- dbl x = x + x
-
--- --------------------------
--- nelems = 16
