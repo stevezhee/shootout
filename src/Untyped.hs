@@ -70,20 +70,20 @@ data Lit
   deriving (Show, Eq, Generic, Ord)
 instance Hashable Lit
 
-data User = User{ uid :: Integer, utype :: Type } deriving (Show, Eq, Ord, Generic)
-instance Hashable User
+data UId = UId{ uid :: Integer, utype :: Type } deriving (Show, Eq, Ord, Generic)
+instance Hashable UId
 
-data Free = Free{ fid :: Integer, ftype :: Type }
+data FId = FId{ fid :: Integer, ftype :: Type }
           deriving (Show, Eq, Ord, Generic)
-instance Hashable Free
+instance Hashable FId
 
-data Bound = Bound{ bid :: Integer, btype :: Type } deriving (Show, Eq, Ord, Generic)
-instance Hashable Bound
+data BId = BId{ bid :: Integer, btype :: Type } deriving (Show, Eq, Ord, Generic)
+instance Hashable BId
 
 data Var -- don't reorder
-  = UVar User
-  | BVar Bound
-  | FVar Free
+  = UVar UId
+  | BVar BId
+  | FVar FId
   deriving (Show, Eq, Generic, Ord)
 instance Hashable Var
 
@@ -96,7 +96,7 @@ instance Hashable a => Hashable (Defn a)
 data CExpr a
   = App (Defn a) [a]
   | Switch a [a] a
-  | While Integer a [(Bound, (a, a))] Bound
+  | While Integer a [(BId, (a, a))] BId
   deriving (Show, Eq, Ord, Generic)
 instance Hashable a => Hashable (CExpr a)
 
@@ -143,12 +143,12 @@ while x f =
     n = maximum [maximumBV x, maxBV e, maximumBV x1]
     (e, x1) = f x0
     x0 = fmap (Exp . bvar) xb
-    xb = snd $ mapAccumR (\(b:bs) j -> (bs, Bound b (etype j))) [n..] x
+    xb = snd $ mapAccumR (\(b:bs) j -> (bs, BId b (etype j))) [n..] x
 
 var :: Var -> Exp
 var = Exp . Left . Right
 
-bvar :: Bound -> Expr Exp
+bvar :: BId -> Expr Exp
 bvar = Left . Right . BVar
     
 rat :: Type -> Rational -> Exp
@@ -165,7 +165,7 @@ defn s t x e = Exp $ Right $ App (Defn s bvs t x) $ toList e
 instantiate :: Tree Type -> Tree Var
 instantiate = snd . mapAccumL f 0
   where
-    f x y = (succ x, UVar $ User x y)
+    f x y = (succ x, UVar $ UId x y)
 
 type F a = State (MapR Integer CExp) a
 
@@ -183,7 +183,7 @@ toAExp x0 = do
       tbl <- get
       let (a, tbl') = insertR e tbl
       modify $ \_ -> tbl'
-      return $ Right $ FVar $ Free a (either atype ctype x)
+      return $ Right $ FVar $ FId a (either atype ctype x)
 
 toCExpDefn :: Defn Exp -> F (Defn AExp)
 toCExpDefn (Defn a bs c d) = Defn a bs c <$> mapM toAExp d
@@ -216,7 +216,7 @@ instance PP Lit where
 
 instance (PP a, PP b) => PP (Either a b) where pp = either pp pp
 
--- printPP :: ([(Free, CExp)], [Defn AExp]) -> IO ()
+-- printPP :: ([(FId, CExp)], [Defn AExp]) -> IO ()
 printPP (cexps, defns) = do
   print $ vcat $ map pp cexps ++ map pp defns
   
@@ -245,12 +245,12 @@ instance PP (Ratio Integer) where
     | denominator x == 1 = pp (numerator x)
     | otherwise = pp (fromRational x :: Double)
 
-instance PP Free where pp x = pp (ftype x) <+> text (showFid $ fid x)
-instance PP User where pp x = pp (utype x) <+> text "u" <> pp (uid x)
+instance PP FId where pp x = pp (ftype x) <+> text (showFid $ fid x)
+instance PP UId where pp x = pp (utype x) <+> text "u" <> pp (uid x)
 
 showFid x = "f" ++ show x
 
-instance PP Bound where pp x = pp (btype x) <+> text "b" <> pp (bid x)
+instance PP BId where pp x = pp (btype x) <+> text "b" <> pp (bid x)
 
 instance PP Var where
   pp x = case x of
@@ -311,7 +311,7 @@ debug x = trace ("debug:" ++ show x) x
 
 idIdx f x = V.unsafeIndex x . fromIntegral . f
 
-fidIdx :: Vector a -> Free -> a
+fidIdx :: Vector a -> FId -> a
 fidIdx = idIdx fid
 
 data MapR a b = MapR
@@ -339,12 +339,12 @@ compile xs =
     cexps0 :: [(Integer, CExp)] = sort $ map swap $ M.toList $ hmapR m
     bvs :: Vector [Var] = constructB argsCExp n cexps0
 --    defns :: [Defn AExp] = map (updFBVarsDefn bvs) defns0
---    cexps :: [(Free, CExp)] = map (\(p, q) -> (toFree bvs p (ctype q), updFBVarsCExp bvs q)) cexps0
+--    cexps :: [(FId, CExp)] = map (\(p, q) -> (toFId bvs p (ctype q), updFBVarsCExp bvs q)) cexps0
     defns1 = map (\(i, e) -> Defn (showFid i) (V.unsafeIndex bvs (fromIntegral i)) (ctype e) (Just e)) cexps0
   in trace (show bvs) (defns1, defns0)
 
--- toFree :: Vector [Var] -> Integer -> Type -> Free
--- toFree bvs i t = let v = Free i t $ fidIdx bvs v in v
+-- toFId :: Vector [Var] -> Integer -> Type -> FId
+-- toFId bvs i t = let v = FId i t $ fidIdx bvs v in v
     
 -- updFBVarsAExp :: Vector [Var] -> AExp -> AExp
 -- updFBVarsAExp bvs x = case x of
