@@ -11,6 +11,8 @@ import NBody
 import Spectral
 
 factorialF = func "factorialF" $ \(i :: Int') -> factorial i
+foo = func "foo" $ \(x :: Word', y :: Int') -> switch x [y] 42
+
 main = do
   let
    a = compile
@@ -34,13 +36,29 @@ main = do
       -- def $ func "asdf" $ \(x :: Int', y :: Int') -> x + y
 --      defIO $ proc "asdf" puti
 --      defIO $ \x -> puti (1 + x)
-      def $ func "asdf" $ \(x :: Int') -> dbl $ dbl (x + 1)
+--      def $ func "foo" $ \(x :: Int') -> dbl (x + 1)
+--      def $ func "foo" $ \(x :: Int') -> if' (x > 3) x (x + 1)
+--      def $ func "foo" $ \(x :: Int') -> if' (x > 3) (1 + (x + 1)) (x + 1)
 --      def factorialF
       -- defIO $ proc "factoriala" $ \x -> puti $ factorialF x,
       -- defIO $ proc "factorial" (puti . factorialF)
       -- defIO fannkuchredux
+      -- def $ func "foo" $ \(x :: Word') -> switch (x + 1) [x - 1, (x / 3) + dbl (x - 1), x - 1, 2 * x] (dbl ( x * (3 + (x / 3) + (x + 1))))
+      def $ func "foo" $ \(x :: Word') -> if' (x > 0) (if' (x < 10) (x + 1) (x + 3)) (x + 42)
       -- defIO nbody
+      -- def $ func "foo" $ \(x :: Word') -> dbl $ fst $ snd $ while (x, (3,2 :: Int')) $ \(a, (b,c)) -> (a > 0, (pred a, (b - c, c + b)))
+      -- def $ func "foo" $ \(x :: Word') -> let (a,b) = snd $ while (x, (3,2 :: Int')) $ \(a, (b,c)) -> (a > 0, (pred a, (b - 42, c + 36))) in a + b
+      -- def $ func "foo" $ \(x :: Word') -> snd (while (x, (3 :: Int')) $ \(a, b) -> (a > 0, (pred a, b - 42))) + snd (while (x, 2 :: Int') $ \(a, c) -> (a > 0, (pred a, c + 36)))
+      -- def $ func "foo" $ \(x :: Word') -> reps x x succ + reps x 3 pred
+      -- def $ func "foo" $ \(x :: Word') -> let (a,b) = reps x (x,3) (\(a,b) -> (succ a, pred b)) in a + b
       -- def $ func "spectral" $ \(x :: Word') -> spctMain C1
+      -- def $ func "foo" $ \(x :: Word') -> snd $ while (x,3 :: Word') $ \(a,b) -> (a > 0, (pred a, succ b))
+      -- def $ func "foo" $ \(x :: Word') -> snd $ while (x,3 :: Word') $ \(a,b) -> (a > 0, (pred a, b))
+--      def $ func "foo" $ \(x :: Word') -> snd $ while ((x, 2 :: Word'),3 :: Word') $ \((a,c),b) -> (a > 0, ((pred a, c), x + c))
+      -- def foo,
+      -- def $ func "bar" $ \(x :: Int', y :: Word') -> foo (y, x)
+--      def $ func "foo" $ \(x :: Word') -> snd $ while (x,3 :: Word') $ \(a,b) -> (a > 0, (pred a, b - x))
+      -- def $ func "foo" $ \(x :: Int') -> while x $ \a -> (a > 0, dtoi $ while (itod a) $ \b -> (b > 10, itod a + pred b))
     ]
   -- print a
   printPP a

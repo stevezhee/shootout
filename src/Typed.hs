@@ -65,9 +65,21 @@ newtype Word32' = Word32'{ unWord32' :: Exp }
 instance Atom Word32' where atomRec = AtomRec Word32' unWord32' $ \_ -> wtype 32
 instance Agg Word32' where aggRec = fromAtomRec
 
+newtype Int32' = Int32'{ unInt32' :: Exp }
+instance Atom Int32' where atomRec = AtomRec Int32' unInt32' $ \_ -> itype 32
+instance Agg Int32' where aggRec = fromAtomRec
+
+newtype Int64' = Int64'{ unInt64' :: Exp }
+instance Atom Int64' where atomRec = AtomRec Int64' unInt64' $ \_ -> itype 64
+instance Agg Int64' where aggRec = fromAtomRec
+
 newtype Double' = Double'{ unDouble' :: Exp }
 instance Agg Double' where aggRec = fromAtomRec
 instance Atom Double' where atomRec = AtomRec Double' unDouble' $ \_ -> TFloating 64
+
+newtype Float' = Float'{ unFloat' :: Exp }
+instance Agg Float' where aggRec = fromAtomRec
+instance Atom Float' where atomRec = AtomRec Float' unFloat' $ \_ -> TFloating 32
 
 class Atom a where atomRec :: AtomRec a
   
@@ -99,10 +111,10 @@ extern s = mkdefn s (\_ -> Nothing)
 externIO :: Agg a => String -> a -> IO' ()
 externIO s = \(a0 :: a) -> IO' $ \w0 -> ((), (extern s :: (a, World) -> World) (a0, w0))
 
-defIO :: (Agg a) => (a -> IO' ()) -> Def
+defIO :: (Agg a) => (a -> IO' ()) -> Defn Exp
 defIO f = def $ \(a, w) -> snd (unIO' (f a) w)
 
-def :: (Agg a, Atom b) => (a -> b) -> Def
+def :: (Agg a, Atom b) => (a -> b) -> Defn Exp
 def f = case unExp $ unAtom $ f instantiate of
   Right (App a _) | body a /= Nothing -> a
   _ -> uerr "unable to create definition (not a definition)"
@@ -128,20 +140,34 @@ instantiate :: Agg a => a
 instantiate = let v = agg $ fmap var $ U.instantiate $ typeofAgg v in v
 
 switch :: (Agg a) => Word' -> [a] -> a -> a
-switch a bs c = agg $ U.switch (unWord' a) (map unAgg bs) (unAgg c)
+switch a = mkSwitch (unWord' a)
 
 while :: Agg a => a -> (a -> (Bool', a)) -> a
 while x f = agg $ U.while (unAgg x) g
   where g = \bs -> let (a, b) = f (agg bs) in (unBool' a, unAgg b)
 
 if' :: Agg a => Bool' -> a -> a -> a
-if' a b c = switch (zext a) [c] b
+if' a b c = mkSwitch (unBool' a) [c] b
+
+mkSwitch a bs c = agg $ U.switch a (map unAgg bs) (unAgg c)
 
 wtod :: Word' -> Double'
 wtod = uitofp
 
+itod :: Int' -> Double'
+itod = sitofp
+
+dtoi :: Double' -> Int'
+dtoi = fptosi
+
 uitofp :: (Atom a, Agg a, Atom b) => a -> b -- a is word and b is floating
 uitofp = extern "uitofp"
+
+sitofp :: (Atom a, Agg a, Atom b) => a -> b -- a is int and b is floating
+sitofp = extern "sitofp"
+
+fptosi :: (Atom a, Agg a, Atom b) => a -> b -- a is floating and b is int
+fptosi = extern "fptosi"
 
 zext :: (Atom a, Agg a, Atom b) => a -> b -- bits of b > bits of a
 zext = extern "zext"

@@ -26,9 +26,13 @@ instance Arith Double' where arithRec = arithRecAtom
 instance FP Double' where fpRec = fpRecAtom
 
 instance Cmp Int' Bool' where cmpRec = cmpRecAtom
+instance Cmp Int32' Bool' where cmpRec = cmpRecAtom
+instance Cmp Int64' Bool' where cmpRec = cmpRecAtom
 instance Cmp Word' Bool' where cmpRec = cmpRecAtom
 instance Cmp Word32' Bool' where cmpRec = cmpRecAtom
 instance Cmp Word64' Bool' where cmpRec = cmpRecAtom
+instance Cmp Float' Bool' where cmpRec = cmpRecAtom
+instance Cmp Double' Bool' where cmpRec = cmpRecAtom
 
 arithRecAtom :: (Atom a, Agg a) => ArithRec a
 arithRecAtom = ArithRec

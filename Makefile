@@ -4,9 +4,9 @@ CC = clang -O3 -lm
 
 EXE =
 ifeq ($(UNAME), Linux)
-	EXE = ~/.local/bin/shootout-exe
+	EXE = ~/.local/bin/shootout.exe
 else
-	EXE = ~/AppData/Roaming/local/bin/shootout-exe.exe
+	EXE = ~/AppData/Roaming/local/bin/shootout.exe
 endif
 
 all :
