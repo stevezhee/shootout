@@ -12,7 +12,7 @@ where
 
 import Data.Int
 import Data.Word
-import Untyped hiding (switch, undef, instantiate)
+import Untyped hiding (if', undef, instantiate)
 import qualified Untyped as U
 
 data AggRec a = AggRec
@@ -139,17 +139,12 @@ uerr s = error $ "user error:" ++ s
 instantiate :: Agg a => a
 instantiate = let v = agg $ fmap var $ U.instantiate $ typeofAgg v in v
 
-switch :: (Agg a) => Word' -> [a] -> a -> a
-switch a = mkSwitch (unWord' a)
-
 while :: Agg a => a -> (a -> (Bool', a)) -> a
 while x f = agg $ U.while (unAgg x) g
   where g = \bs -> let (a, b) = f (agg bs) in (unBool' a, unAgg b)
 
 if' :: Agg a => Bool' -> a -> a -> a
-if' a b c = mkSwitch (unBool' a) [c] b
-
-mkSwitch a bs c = agg $ U.switch a (map unAgg bs) (unAgg c)
+if' a b c = agg $ U.if' (unBool' a) (unAgg b) (unAgg c)
 
 wtod :: Word' -> Double'
 wtod = uitofp

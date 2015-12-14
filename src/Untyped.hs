@@ -1,6 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TupleSections #-}
 
 module Untyped where
 
@@ -97,7 +98,7 @@ instance Hashable a => Hashable (Defn a)
 
 data CExpr a
   = App (Defn a) [a]
-  | Switch a [a] a
+  | If a a a
   | While a a -- 2nd argument is a Lam
   | Lam Integer [BId] [a]
   | From a BId
@@ -125,7 +126,7 @@ maxBV x = case unExp x of
     Lam n _ _ -> n
     App (Loop _ _ b) _ -> maxBV b
     App _ bs -> maximumBV bs
-    Switch a bs c -> maximumBV (a : c : bs)
+    If a b c -> maximumBV [a,b,c]
     While _ b -> maxBV b
     From a _ -> maxBV a
     
@@ -137,15 +138,17 @@ zipWithTree f x y =
    (Node bs, Node cs) -> Node $ map (uncurry $ zipWithTree f) $ zip bs cs
    _ -> unused "zipWithTree"
 
-listToTree :: [Tree a] -> Tree [a]
-listToTree xs@(b:_) = foldr (zipWithTree (:)) (fmap (\_ -> []) b) xs
+-- listToTree :: [Tree a] -> Tree [a]
+-- listToTree xs@(b:_) = foldr (zipWithTree (:)) (fmap (\_ -> []) b) xs
+
+-- switch :: Exp -> [Tree Exp] -> Tree Exp -> Tree Exp
+-- switch x ys z = fmap (\(a:bs) -> mkExp $ Switch x bs a) $ listToTree (z : ys)
 
 zipTree :: Tree a -> Tree b -> Tree (a,b)
 zipTree = zipWithTree (,)
 
-switch :: Exp -> [Tree Exp] -> Tree Exp -> Tree Exp
-switch x ys z = fmap (\(a:bs) -> mkExp $ Switch x bs a) $ listToTree (z : ys)
-
+if' x y z = fmap (\(a,b) -> mkExp $ If x a b) $ zipTree y z
+  
 while :: Tree Exp -> (Tree Exp -> (Exp, Tree Exp)) -> Tree Exp
 while x f =
   fmap (mkExp . From (mkExp . App defn $ toList x)) xb
@@ -208,7 +211,7 @@ toCExp x = case unExp x of
   Left a -> return $ Left a
   Right e -> Right <$> case e of
     App a bs -> App <$> toAExpDefn a <*> mapM toAExp bs
-    Switch a bs c -> Switch <$> toAExp a <*> mapM toAExp bs <*> toAExp c
+    If a b c -> If <$> toAExp a <*> toAExp b <*> toAExp c
     From a b -> flip From b <$> toAExp a
     While a b -> While <$> toAExp a <*> toAExp b
     Lam a bs cs -> Lam a <$> return bs <*> mapM toAExp cs
@@ -237,8 +240,6 @@ instance (PP a, PP b) => PP (Either a b) where pp = either pp pp
 printPP (cexps, defns) = do
   print $ vcat $ map pp cexps ++ map pp defns
   
-ppSwitch a bs c = vcat [text "switch" <+> ppParens a, nest 2 $ pp $ bs ++ [c]]
-
 ppParens x = if (any isSpace $ show d) then parens d else d
   where d = pp x
 
@@ -278,7 +279,7 @@ ppDefnBody = maybe (text "extern") pp
 
 instance PP a => PP (CExpr a) where
   pp x = case x of
-    Switch a bs c -> ppSwitch a bs c
+    If a b c -> vcat [text "if" <+> ppParens a, nest 2 $ pp [b,c]]
     App a@Defn{} bs -> text (did a) <+> hsep (map ppParens bs)
     App (Loop (Just v) _ _) bs -> pp v <+> hsep (map ppParens bs)
     App a bs -> pp a <+> hsep (map ppParens bs)
@@ -308,7 +309,7 @@ ctype = cexprtype atype
 cexprtype :: (a -> Type) -> CExpr a -> Type
 cexprtype f x = case x of
   App a _ -> dtype a
-  Switch _ _ c -> f c
+  If _ _ c -> f c
   From _ b -> btype b
   While _ b -> f b
   Lam{} -> TAgg
@@ -363,33 +364,19 @@ compile xs =
     -- (gr, _) = graphFromEdges' $ ((), n, map fid $ catMaybes $ map asdf defns0) : map foo cexps0
   in
    -- trace (show $ indegree gr)
+   trace (show $ concatMap foo $ map (\(a,b) -> (Atom $ Right $ FVar $ FId a $ ctype b, b)) cexps0)
     (defns1, defns0)
 
-asdf :: Defn AExp -> Maybe FId
-asdf x = case x of
-  Defn _ _ _ (Just a) -> bar a
-  _ -> Nothing
-  
-foo :: (Integer, CExp) -> ((), Integer, [Integer])
-foo (i,e) = ((), i, map fid $ blah e)
+data Pred a = And (Pred a) (Pred a) | Not (Pred a) | Atom a deriving Show
 
-bar :: AExp -> Maybe FId
-bar x = case x of
-  Right (FVar a) -> Just a
-  _ -> Nothing
-
-blah :: CExp -> [FId]
-blah x = nub $ case x of
-  App a bs -> case a of
-    Loop{} -> catMaybes [lid a] ++ f bs
-    Defn{} -> f $ catMaybes [body a] ++ bs
-  Switch a bs c -> f (a : c : bs)
-  From a _ -> f [a]
-  While a b -> f [a, b]
-  Lam _ _ cs -> f cs
-  where
-    f = catMaybes . map bar
-
+-- foo :: (Pred a, CExpr (Pred a)) -> [(Pred a, Pred a)]
+foo (i,x) = case x of
+  If a b c -> [(a, i), (b, And i $ Atom a), (c, And i (Not $ Atom a))]
+  While a b ->[(a, i), (b, And i $ Atom a)]
+  From a _ -> [(a, i)]
+  App _ bs -> map (,i) bs
+  Lam _ _ cs -> map (,i) cs
+    
 -- asdf :: Defn AExp -> Maybe FId
 -- asdf x = case x of
 --   Defn _ _ _ (Just a) -> bar a

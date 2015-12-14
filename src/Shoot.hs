@@ -15,7 +15,9 @@ where
 import Prelude hiding ((==), (/=), (>), (<), (>=), (<=), (+), (-), (*), (/), (%), (^), abs, fromInteger, fromRational, pi, sqrt, negate, sum, succ, pred)
 import Typed
 import qualified Prelude as P
+import Data.Ratio
 
+instance (Arith a, Integral a) => Arith (Ratio a) where arithRec = arithRecFractional
 instance Arith Int where arithRec = arithRecIntegral
 instance Arith Integer where arithRec = arithRecIntegral
 instance Arith Int' where arithRec = arithRecAtom
@@ -50,8 +52,15 @@ binop s x y = extern s (x,y)
 arithRecIntegral :: Integral a => ArithRec a
 arithRecIntegral = ArithRec (P.fromInteger) (P.+) (P.-) (P.*) (P.div) (P.rem) (P.abs)
 
+arithRecFractional :: Fractional a => ArithRec a
+arithRecFractional = ArithRec (P.fromInteger) (P.+) (P.-) (P.*) (P./) (P.undefined) (P.abs)
+
 bitsRecAtom :: (Atom a, Agg a) => BitsRec a
-bitsRecAtom = BitsRec (binop "shl") (binop "shr") (binop "band") (binop "bor") (binop "xor")
+bitsRecAtom =
+  BitsRec (binop "shl") (binop "shr") (binop "band") (binop "bor") (binop "xor")
+
+switch :: (Agg a) => Word' -> [a] -> a -> a
+switch x ys z = foldr (\(i,a) b -> if' (x == lit i) a b) z $ zip [0 ..] ys
 
 instance Bits Word' where bitsRec = bitsRecAtom
 instance Bits Word32' where bitsRec = bitsRecAtom
