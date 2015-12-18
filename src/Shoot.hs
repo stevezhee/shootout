@@ -21,6 +21,7 @@ instance (Arith a, Integral a) => Arith (Ratio a) where arithRec = arithRecFract
 instance Arith Int where arithRec = arithRecIntegral
 instance Arith Integer where arithRec = arithRecIntegral
 instance Arith Int' where arithRec = arithRecAtom
+instance Arith Bool' where arithRec = arithRecAtom
 instance Arith Word' where arithRec = arithRecAtom
 instance Arith Word32' where arithRec = arithRecAtom
 instance Arith Word64' where arithRec = arithRecAtom
@@ -206,6 +207,9 @@ succ = (+) 1
 
 negate :: Arith a => a -> a
 negate = (-) 0 -- If you define this as (*) (-1) then you get an infinite loop
+
+not' :: Arith a => a -> a
+not' x = negate x - 1
 
 pred :: Arith a => a -> a
 pred = (+) (-1)

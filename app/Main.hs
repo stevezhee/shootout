@@ -14,8 +14,7 @@ factorialF = func "factorialF" $ \(i :: Int') -> factorial i
 foo = func "foo" $ \(x :: Word', y :: Int') -> switch x [y] 42
 
 main = do
-  let
-   a = compile
+  a <- compile
     -- [ defIO $ proc "foo" $ \() -> do
     --      puti 42
     --      puti 27
@@ -44,7 +43,16 @@ main = do
       -- defIO $ proc "factorial" (puti . factorialF)
       -- defIO fannkuchredux
       -- def $ func "foo" $ \(x :: Word') -> switch (x + 1) [x - 1, (x / 3) + dbl (x - 1), x - 1, 2 * x] (dbl ( x * (3 + (x / 3) + (x + 1))))
-      def $ func "foo" $ \(x :: Word') -> if' (x > 0) (if' (x < 10) (x + 1) (x + 3)) (x + 42)
+      -- def $ func "foo" $ \(x :: Word') -> if' (x > 0) (if' (x < 10) (x + 1) (x + 3)) (x + 42)
+      -- def $ func "foo" $ \(x :: Word') -> if' (x > 0) (if' (x < 10) (x + 1) (x + 3)) (if' (x + 1 > 42) ((x + 1) + (x + 42)) (x + 42))
+      -- def $ func "foo" $ \(x :: Word') -> if' (x < 10) (if' (x < 5) (x + 1) x) (if' ((x+1) < 42) (x + 1) x)
+      -- def $ func "foo" $ \(x :: Word') -> if' (x < 10) (x + 1) (x + 2)
+      -- def $ func "foo" $ \(x :: Word') -> if' (x + 1 < 10) (x + 1) (x + 2)
+      -- def $ func "foo" $ \(x :: Word') -> let y = x + 1 in y + y + y
+      def $ func "foo" $ \(x :: Word') -> if' (3 + (x + 1) > 10) (2 + (x + 1)) (x + 2)
+      
+      -- def $ func "foo" $ \(x :: Word') -> if' (x > 0) (if' (x < 10) (x + 1) x) (if' (x + 1 > 42) (x + 1) x)
+      -- def $ func "foo" $ \(x :: Bool', y :: Bool') -> if' x (if' x (not' x) x) (if' (not' x) (not' x) x)
       -- defIO nbody
       -- def $ func "foo" $ \(x :: Word') -> dbl $ fst $ snd $ while (x, (3,2 :: Int')) $ \(a, (b,c)) -> (a > 0, (pred a, (b - c, c + b)))
       -- def $ func "foo" $ \(x :: Word') -> let (a,b) = snd $ while (x, (3,2 :: Int')) $ \(a, (b,c)) -> (a > 0, (pred a, (b - 42, c + 36))) in a + b
@@ -62,6 +70,7 @@ main = do
     ]
   -- print a
   printPP a
+  return ()
   
 data C1 = C1
 instance Count C1 where countof _ = 1
