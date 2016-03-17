@@ -1,8 +1,937 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE NoImplicitPrelude #-}
+-- {-# LANGUAGE IncoherentInstances #-}
+-- {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RebindableSyntax #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveGeneric #-}
+-- {-# LANGUAGE FlexibleContexts #-}
 
+
+module Main where
+
+import qualified Data.Bits as B
+import           Data.Bits hiding (xor)
+import           Prelude hiding (foldr, maximum, concat) -- hiding (fromInteger, (+), (-), (*), (/), (>), (<), (>=), (<=), (==), (/=), div, rem, or, and)
+-- import           Data.Bits hiding (xor)
+import Data.Hashable (Hashable)
+import qualified Data.Hashable as H
+-- import           Data.List (intersperse)
+import           Data.Map (Map)
+import qualified Data.Map as M
+import           Data.Maybe
+-- import qualified Data.Set as S
+import           Data.Word
+import qualified Prelude as P
+import           Control.Monad.Identity
+-- import           T
+-- -- import           Prelude (fromIntegral, undefined, Either(..), ($), unwords, fmap, (.), (++), String, error, Bool(..), show, concat, unzip3, fst, Float, Int, fromEnum, print, Integer, Show, Num)
+-- import           Prelude hiding ((==), (/=), (>), (<), (>=), (<=), (+), (-), (*), (/), (%), (^), abs, fromInteger, fromRational, pi, sqrt, negate, sum, succ, pred)
+import           Debug.Trace
+-- instance TyCmp Int Bool where cmpRec = cmpRecA
+-- class TyCmp a b | a -> b where cmpRec :: CmpRec a b
+-- instance Rep r => TyCmp (r Int) (r Bool) where cmpRec = cmpRecR
+import Data.Functor
+import Data.Traversable
+import Data.Foldable
+import Control.Applicative
+import GHC.Generics (Generic)
+
+type UAExp = AExp ULit
+
+data ULit
+  = LInt Int
+  | LWord Word
+  | LBool Bool
+  deriving (Show, Generic, Eq, Ord)
+instance Hashable ULit
+
+toUAExp :: Ty a => AExp a -> UAExp
+toUAExp x = case x of
+  BVar a -> BVar a
+  HVar a -> HVar a
+  Lit a -> Lit $ toULit a
+  
+fromUAExp :: Ty a => UAExp -> AExp a
+fromUAExp x = case x of
+  BVar a -> BVar a
+  HVar a -> HVar a
+  Lit a -> Lit $ fromULit a
+
+toUE :: Ty a => E a -> UE
+toUE x = x{ aexp = toUAExp $ aexp x }
+
+fromUE :: Ty a => UE -> E a
+fromUE x = x{ aexp = fromUAExp $ aexp x }
+
+type UE = E ULit
+data E a = E
+  { maxBV :: Word
+  , cexps :: Map Hash UCExp
+  , aexp :: AExp a
+  } deriving Show
+
+debug :: Show a => a -> b -> b
+debug x = trace (show x)
+
+instance Ty a => PP (E a) where
+  pp x = unlines
+    [ pp $ aexp a'
+    , unlines
+        [ unwords [ pp $ f $ HVar k, "=", pp v ]
+        | (k, v) <- M.toList $ cexps a'
+        ]
+    ]
+    where
+      a = toUE x
+      tbl = M.fromList $ zip (map HVar $ M.keys $ cexps a) $ map BVar [0 .. ]
+      f = subst tbl
+      a' = rename f a
+      
+ppBVar = (++) "%b" . show
+ppHVar = (++) "%h" . show
+
+instance PP ULit where
+  pp x = case x of
+    LInt a -> pp a
+    LWord a -> pp a
+    LBool a -> pp a
+
+indent x ys = unlines (x : map ("  " ++) ys)
+
+instance PP UCExp where
+  pp x = case x of
+    Op a bs -> unwords (a : map pp bs)
+
+instance PP a => PP (AExp a) where
+  pp x = case x of
+    Lit a -> pp a
+    BVar a -> ppBVar a
+    HVar a -> ppHVar a
+
+uaexp :: Ty a => E a -> UAExp
+uaexp = toUAExp . aexp
+
+maxBVAgg :: Agg a => a -> Word
+maxBVAgg = maximum . fmap maxBV . unAgg
+
+uaexpAgg :: Agg a => a -> Tree UAExp
+uaexpAgg = fmap aexp . unAgg
+
+cexpsAgg :: Agg a => a -> Map Hash UCExp
+cexpsAgg = foldr M.union M.empty . fmap cexps . unAgg
+
+zipTree :: Tree a -> Tree b -> Tree (a,b)
+zipTree x y = case (x, y) of
+  (Leaf a, Leaf b) -> Leaf (a,b)
+  (Node bs, Node cs) -> Node $ fmap (uncurry zipTree) $ zip bs cs
+
+-- mkSubstTbl :: Tree BVar -> Tree BVar -> Map BVar BVar
+-- mkSubstTbl x y = foldr (\(a,b) -> M.insert a b) M.empty $ zipTree x y
+
+-- subst :: Map BVar BVar -> BVar -> BVar
+-- subst tbl k = fromMaybe k $ M.lookup k tbl
+
+type BVar = Word
+
+rename :: (UAExp -> UAExp) -> UE -> UE
+rename f e = e{ cexps = fmap g $ cexps e, aexp = f $ aexp e }
+  where
+    g (Op a bs) = Op a $ fmap f bs
+
+subst tbl k = fromMaybe k $ M.lookup k tbl
+
+while :: Agg a => a -> (a -> (E Bool, a)) -> a
+while x f =
+  -- agg $ fmap (mapUE (subst $ mkSubstTbl (fmap aexp ubvs) $ fmap aexp t)) t
+  agg $ fmap (\u -> u{ cexps = M.union (cexpsAgg x) cexps' }) a
+  where
+    (t,e) = mkWhile x f
+    a = fmap mkPhi t
+    tbl = M.fromList [ (k, aexp v) | ((k,_), v) <- toList $ zipTree t a ]
+    cexps' = foldr M.union (cexps $ rename (subst tbl) e) $ fmap cexps a
+    mkPhi (_,(b,c)) =
+      e{ cexps = M.singleton k v
+       , aexp = HVar k
+       }
+      where
+        v = Op "phi" [aexp e, b, c]
+        k = hash v
+        
+mkWhile :: (Agg a) => a -> (a -> (E Bool, a)) -> (Tree (UAExp, (UAExp, UAExp)), UE)
+mkWhile x f =
+  ( t
+  , E{ maxBV = max (maxBVAgg x) i
+     , cexps = M.insert k v $ M.unions [ cexps p, cexpsAgg x' ]
+     , aexp = HVar k
+     }
+  )
+  where
+    t = zipTree (uaexpAgg bvs) $ zipTree (uaexpAgg x) (uaexpAgg x') 
+    k = hash v
+    v = Op "while" $ uaexp p : concat [ [a,b,c] | (a,(b,c)) <- toList t ]
+    n = max (maxBV p) (maxBVAgg x')
+    (i, bvs) = inst n x
+    (p, x') = f bvs
+
+
+if' :: Agg a => E Bool -> a -> a -> a
+if' x y z = agg $ fmap (mkIf x) $ zipTree (unAgg y) (unAgg z)
+
+mkIf :: E Bool -> (UE, UE) -> UE
+mkIf x (y,z) = E
+  { maxBV = maximum [maxBV x, maxBV y, maxBV z]
+  , cexps = M.insert k v $ M.unions [cexps x, cexps y, cexps z]
+  , aexp = HVar k
+  }
+  where
+    v = Op "if" [uaexp x, aexp y, aexp z]
+    k = hash v
+      
+binop :: (Ty a, Ty b, Ty c) => (a -> b -> c) -> [String] -> E a -> E b -> E c
+binop f ss x y = case (aexp x, aexp y) of
+  (Lit a, Lit b) -> lit $ f a b
+  _ -> E
+    { maxBV = maximum [maxBV x, maxBV y]
+    , cexps = M.insert k v $ M.unions [cexps x, cexps y]
+    , aexp = HVar k
+    }
+  where
+    v = Op (unwords ss) [uaexp x, uaexp y]
+    k = hash v
+
+bvar :: Ty a => Word -> E a
+bvar = E 0 M.empty . BVar
+
+lit :: Ty a => a -> E a
+lit = E 0 M.empty . Lit
+  
+class Agg a where
+  agg :: Tree UE -> a
+  unAgg :: a -> Tree UE
+  inst :: Word -> a -> (Word, a)
+
+instance Ty a => Agg (E a) where
+  agg (Leaf a) = fromUE a
+  unAgg = Leaf . toUE
+  inst i _ = (succ i, bvar i)
+    
+instance (Agg a, Agg b) => Agg (a,b) where
+  agg (Node [a,b]) = (agg a, agg b)
+  unAgg (a,b) = Node [unAgg a, unAgg b]
+  inst i (a, b) = let (j, a') = inst i a in let (k, b') = inst j b in (k, (a', b'))
+
+-- --  inst :: Word -> a -> Tree b
+--   unAgg :: a -> Tree b
+--   agg :: Tree b -> a
+--   -- uninst :: Tree Word -> a
+--   -- mkR :: Tree Word -> a
+--   -- maxBVAgg :: a -> Word
+
+--   inst :: u -> Word -> a -> (Word, a)
+
+-- instance Rep r u => Agg (r a) u where
+--   agg (Leaf x) = toA x
+--   unAgg = Leaf . fromA
+--   inst (_ :: u) i _ = (succ i, (bvar :: Rep r u => Word -> r a) i)
+  
+-- instance (Agg a u, Agg b u) => Agg (a, b) u where
+--   agg (Node [a, b]) = (agg a, agg b)
+--   unAgg (a, b) = Node [unAgg a, unAgg b]
+-- --  
+  
+-- class Rep r u | u -> r where
+--   toA :: u -> r a
+--   fromA :: r a -> u
+--   bvar :: Word -> r a
+
+instance PP Int where pp = show
+instance PP Word where pp = show
+instance Ty Int where
+  ty _ = "i32"
+  toULit = LInt
+  fromULit (LInt a) = a
+
+data AExp a = Lit a | HVar Word | BVar Word deriving (Show, Generic, Eq, Ord)
+instance Hashable a => Hashable (AExp a)
+
+-- type UAExp = AExp Lit
+
+data UCExp
+  = Op String [UAExp]
+    deriving (Show, Generic)
+instance Hashable UCExp
+
+type Hash = Word
+
+hash :: UCExp -> Hash
+hash = fromIntegral . H.hash
+
+class (TyCmp a, Num a) => TyNum a
+class (Ty a, Ord a) => TyCmp a
+
+data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq, Generic)
+instance Hashable a => Hashable (Tree a)
+    
+instance Foldable Tree where
+  foldr f b x = case x of
+    Leaf a -> f a b
+    Node ns -> foldr (flip (foldr f)) b ns
+
+instance Traversable Tree where
+  traverse f x = case x of
+    Leaf a -> Leaf <$> f a
+    Node ns -> Node <$> traverse (traverse f) ns
+
+instance Functor Tree where
+  fmap f x = case x of
+    Leaf a -> Leaf $ f a
+    Node ns -> Node $ fmap (fmap f) ns
+
+class PP a where pp :: a -> String
+class PP a => Ty a where
+  ty :: a -> String
+  toULit :: a -> ULit
+  fromULit :: ULit -> a
+  
+-- fooBinop :: (Ty a, Ty b, Ty c) => (a -> b -> c) -> E a -> E b -> E c
+-- fooBinop f x y = case (unLit x, unLit y) of
+--   (Just a, Just b) -> lit $ f a b
+  
+--                       -- undefined -- Exp $ max (maxBV x) (maxBV y)
+  
+-- lengthAgg :: Agg a => a -> Word
+-- lengthAgg = snd . inst 0
+
+-- instance (Ty a) => Agg (E a) where
+--   mkR (Leaf i) = undefined -- Exp i
+--   uninst (Leaf i) = bvar i
+--   inst i _ = (Leaf i, i + 1)
+-- --  maxBVAgg = maxBV
+  
+-- instance (Agg a, Agg b) => Agg (a, b) where
+--   mkR (Node [a, b]) = (mkR a, mkR b)
+--   uninst (Node [a,b]) = (uninst a, uninst b)
+--   inst i (x, y) = let (a, j) = inst i x in let (b, k) = inst j y in (Node [a, b], k)
+--   maxBVAgg (x, y) = max (maxBVAgg x) (maxBVAgg y)
+  
+-- class Rep r where
+--   lit :: Ty a => a -> r a
+--   bvar :: Ty a => Word -> r a
+--   if' :: Ty a => r Bool -> r a -> r a -> r a
+--   while :: Agg a => a -> (a -> (r Bool, a)) -> a
+--   add :: TyNum a => r a -> r a -> r a
+--   sub :: TyNum a => r a -> r a -> r a
+--   mul :: TyNum a => r a -> r a -> r a
+--   gt :: TyCmp a => r a -> r a -> r Bool
+
+-- debug :: Show a => a -> b -> b
+-- debug = trace . show
+
+-- instance Rep E where
+  -- lit = Exp 0 M.empty . Lit . toLit
+  -- bvar = Exp 0 M.empty . BVar -- not a typo
+  -- if' x y z = Exp (maximum [maxBV x, maxBV y, maxBV z]) (insert k v $ unions [cexps x, cexps y, cexps z]) $ HVar k
+  --   where
+  --     k = hash v
+  --     v = If (aexp x) (aexp y) (aexp z)
+  -- while (x :: a) f = mkR $ fmap (\_ -> max (maxBVAgg x) i) t
+  --   where
+  --     n :: Word = max (maxBV p) (maxBVAgg a')
+  --     (t :: Tree Word, i :: Word) = inst n x
+  --     a :: a = uninst t
+  --     (p :: Exp Bool, a' :: a) = f a
+  -- while x f = While x a p a'
+  --   where
+  --     n = max (maxBV p) (maxBVAgg a')
+  --     (a, i) = inst n x
+  --     (p, a') = f a
+
+  -- add = fooBinop (+)
+  -- sub = fooBinop (-)
+  -- mul = fooBinop (*)
+  -- gt = fooBinop (>)
+
+instance TyNum Int
+instance TyCmp Int
+
+fact :: E Int -> E Int
+fact n = snd $ while (n, lit 1) $ \(a,b) -> (a `gt` lit 0, (a `sub` lit 1, a `mul` b))
+
+sub :: TyNum a => E a -> E a -> E a
+sub = binop (-) ["sub", wrapFlags]
+
+gt :: TyCmp a => E a -> E a -> E Bool
+gt = binop (>) ["icmp", "sgt"]
+
+mul :: TyNum a => E a -> E a -> E a
+mul = binop (*) ["mul", wrapFlags]
+
+-- fact2 :: E Int -> E Int
+-- fact2 n = snd $ while (n, lit 1) $ \(a,b) -> (a `gt` lit 0, (a `sub` lit 1, if' (a `gt` lit 10) (fact (a `mul` b)) (a `sub` b)))
+
+  ------
+-- while :: r a -> (r a -> (r Bool, r a)) -> r a
+-- while2 :: (r a, r b) -> ((r a, r b) -> (r Bool, (r a, r b))) -> (r a, r b)
+
+-- class Rep r where
+--   lit :: a -> r a
+  
+-- class Agg a where
+--   while :: Rep r => a -> (a -> (r Bool, a)) -> a
+--   fun :: Rep r => String -> (a -> r b) -> a -> r b
+
+
+--   while :: Rep r => a -> (a -> (r Bool, a)) -> a
+
+-- instance Rep r u => Agg (r a)
+-- instance Rep r => Agg (r a, r b)
+
+-- fromInteger :: (Rep r, Num a) => Integer -> r a
+-- fromInteger = lit . P.fromInteger
+
+-- foo :: (Rep r, Num a, Ord a) => r a -> r [a]
+-- foo x = if' (1 + x > 3) (stream 2) (stream 3)
+
+-- stream :: r a -> r [a]
+-- stream = undefined
+
+-- bar :: (Rep r, Num a, Ord a) => r a
+-- bar = foo 1
+
+-- class Rep r where
+--   lit :: a -> r a
+--   if' :: r Bool -> r a -> r a -> r a
+--   while :: r a -> r b -> (r a -> r b -> r Bool) -> (r a -> r b -> r a) -> (r a -> r b -> r b) -> r b
+--   while2 :: r a -> r b -> r c -> (r a -> r b -> r c -> r Bool) -> (r a -> r b -> r c -> r a) -> (r a -> r b -> r c -> r b) -> (r a -> r b -> r c -> r c) -> r c
+--   (+) :: Num a => r a -> r a -> r a
+--   (-) :: Num a => r a -> r a -> r a
+--   (*) :: Num a => r a -> r a -> r a
+--   (>) :: Ord a => r a -> r a -> r Bool
+--   (<) :: Ord a => r a -> r a -> r Bool
+    
+-- binopI :: (a -> b -> c) -> Identity a -> Identity b -> Identity c
+-- binopI f x y = f <$> x <*> y
+
+-- fact n = while n 1 (\a _ -> a > 1) (\a _ -> a - 1) (*)
+
+-- fib n = while2 n 0 1 (\a _ _ -> a > 0) (\a _ _ -> a - 1) (\_ _ c -> c) (\_ b c -> b + c)
+
+-- fact3 :: Rep r => r Int
+-- fact3 = fact 5
+
+-- fib3 :: [Identity Int]
+-- fib3 = map fib [1,2,3,4,5,6,7]
+
+-- instance Rep Identity where
+--   lit = Identity
+--   if' x y z = case runIdentity x of
+--     True -> y
+--     False -> z
+--   while x y f g h = if' (f x y) (while (g x y) (h x y) f g h) y
+--   while2 x y z f g h i = if' (f x y z) (while2 (g x y z) (h x y z) (i x y z) f g h i) z
+--   (+) = binopI (P.+)
+--   (-) = binopI (P.-)
+--   (*) = binopI (P.*)
+--   (>) = binopI (P.>)
+--   (<) = binopI (P.<)
+  
+-- data CmpRec a b = CmpRec
+--   { _if :: b -> a -> a -> a
+--   , _eq :: a -> a -> b
+--   , _ne :: a -> a -> b
+--   , _gt :: a -> a -> b
+--   , _ge :: a -> a -> b
+--   , _lt :: a -> a -> b
+--   , _le :: a -> a -> b
+--   }
+
+-- class TyCmp a where
+
+
+-- ifThenElse :: TyCmp a b => b -> a -> a -> a
+-- ifThenElse = _if cmpRec
+
+-- (==) :: TyCmp a b => a -> a -> b
+-- (==) = _eq cmpRec
+-- (/=) :: TyCmp a b => a -> a -> b
+-- (/=) = _ne cmpRec
+-- (>) :: TyCmp a b => a -> a -> b
+-- (>) = _gt cmpRec
+-- (<) :: TyCmp a b => a -> a -> b
+-- (<) = _lt cmpRec
+-- (>=) :: TyCmp a b => a -> a -> b
+-- (>=) = _ge cmpRec
+-- (<=) :: TyCmp a b => a -> a -> b
+-- (<=) = _le cmpRec
+
+-- cmpRecR :: (Rep r) => CmpRec (r a) (r Bool)
+-- cmpRecR = CmpRec
+--   { _if = if'
+--   , _eq = eq
+--   , _ne = ne
+--   , _gt = gt
+--   , _ge = ge
+--   , _lt = lt
+--   , _le = le
+--   }
+
+-- cmpRecA :: (Eq a, Ord a) => CmpRec a Bool
+-- cmpRecA = CmpRec
+--   { _if = \a b c -> case a of
+--                      True -> b
+--                      False -> c
+--   , _eq = (P.==)
+--   , _ne = (P./=)
+--   , _gt = (P.>)
+--   , _ge = (P.>=)
+--   , _lt = (P.<)
+--   , _le = (P.<=)
+--   }
+
+{-
+
+bitsRecA :: (Bits a, Integral a) => BitsRec a
+bitsRecA = BitsRec
+  { _shl = \a b -> shiftL a (fromIntegral b)
+  , _shr = \a b -> shiftL a (fromIntegral b)
+  , _and = (.&.)
+  , _or = (.|.)
+  , _xor = B.xor
+  }
+
+bitsRecR :: (Rep r) => BitsRec (r a)
+bitsRecR = BitsRec
+  { _shl = shl
+  , _shr = shr
+  , _and = and
+  , _or = or
+  , _xor = xor
+  }
+
+data BitsRec a = BitsRec
+  { _shl :: a -> a -> a
+  , _shr :: a -> a -> a
+  , _and :: a -> a -> a
+  , _or :: a -> a -> a
+  , _xor :: a -> a -> a
+  }
+fromInteger :: TyNum a => Integer -> a
+fromInteger = _fromInteger numRec
+
+class TyNum a where numRec :: NumRec a
+
+numRecI :: (Num a, Integral a) => NumRec a
+numRecI = NumRec
+  { _fromInteger = P.fromInteger
+  , _add = (P.+)
+  , _sub = (P.-)
+  , _mul = (P.*)
+  , _div = P.div
+  , _rem = P.rem
+  }
+
+numRecF :: (Num a, Fractional a) => NumRec a
+numRecF = NumRec
+  { _fromInteger = P.fromInteger
+  , _add = (P.+)
+  , _sub = (P.-)
+  , _mul = (P.*)
+  , _div = (P./)
+  , _rem = undefined
+  }
+
+instance TyNum Int where numRec = numRecI
+instance TyBits Int where bitsRec = bitsRecA
+
+class Rep r where
+  lit :: a -> r a
+  add :: r a -> r a -> r a
+  sub :: r a -> r a -> r a
+  mul :: r a -> r a -> r a
+  div :: r a -> r a -> r a
+  rem :: r a -> r a -> r a
+  if' :: r Bool -> r a -> r a -> r a
+  eq :: r a -> r a -> r Bool
+  ne :: r a -> r a -> r Bool
+  gt :: r a -> r a -> r Bool
+  ge :: r a -> r a -> r Bool
+  lt :: r a -> r a -> r Bool
+  le :: r a -> r a -> r Bool
+  shl :: r a -> r a -> r a
+  shr :: r a -> r a -> r a
+  and :: r a -> r a -> r a
+  or :: r a -> r a -> r a
+  xor :: r a -> r a -> r a
+
+class TyNum a => TyBits a where bitsRec :: BitsRec a
+                       
+numRecR :: (Rep r, TyNum a) => NumRec (r a)
+numRecR = NumRec
+  { _fromInteger = lit . fromInteger
+  , _add = add
+  , _sub = sub
+  , _mul = mul
+  , _div = div
+  , _rem = rem
+  }
+
+(+) :: TyNum a => a -> a -> a
+(+) = _add numRec
+
+(-) :: TyNum a => a -> a -> a
+(-) = _sub numRec
+
+(*) :: TyNum a => a -> a -> a
+(*) = _mul numRec
+
+(/) :: TyNum a => a -> a -> a
+(/) = _div numRec
+
+(%) :: TyNum a => a -> a -> a
+(%) = _rem numRec
+
+instance Rep r => TyNum (r Int) where numRec = numRecR
+instance Rep r => TyBits (r Int) where bitsRec = bitsRecR
+
+newtype MaxBV a = MaxBV{ unMaxBV :: Int } deriving Show
+
+maximumBV = MaxBV . maximum
+
+binopMaxBV x y = maximumBV [unMaxBV x, unMaxBV y]
+
+instance Rep MaxBV where
+  lit _ = MaxBV 0
+  add = binopMaxBV
+  sub = binopMaxBV
+  mul = binopMaxBV
+  div = binopMaxBV
+  rem = binopMaxBV
+  if' x y z = maximumBV [unMaxBV x, unMaxBV y, unMaxBV z]
+  eq = binopMaxBV
+  ne = binopMaxBV
+  gt = binopMaxBV
+  ge = binopMaxBV
+  lt = binopMaxBV
+  le = binopMaxBV
+  shl = binopMaxBV
+  shr = binopMaxBV
+  and = binopMaxBV
+  or = binopMaxBV
+  xor = binopMaxBV
+-}
+-- stream :: TyCmp a b => a -> (a -> b) -> (a -> a) -> [a]
+-- stream a f g = if f a then [a] else [] --  : stream (g a) f g) else []
+
+-- fold :: b -> (a -> b -> b) -> [a] -> b
+-- fold b f xs = case xs of
+--   [] -> b
+--   (x:xs') -> fold (f x b) f xs'
+
+-- fact :: Int -> Int
+-- fact n = fold 1 (*) $ stream n ((<) 1) ((+) 1)
+
+{-
+(.<<) :: TyBits a => a -> a -> a
+(.<<) = _shl bitsRec
+(.>>) :: TyBits a => a -> a -> a
+(.>>) = _shr bitsRec
+(.&) :: TyBits a => a -> a -> a
+(.&) = _and bitsRec
+(.|) :: TyBits a => a -> a -> a
+(.|) = _or bitsRec
+(.^) :: TyBits a => a -> a -> a
+(.^) = _xor bitsRec
+
+t :: (TyCmp a b, TyBits a) => a -> a
+t x = if ((1 + x) / 3) > 2 then x else x .<< 3
+
+tt :: (TyCmp a b, TyBits a) => a
+tt = t 3
+
+-}
+main = putStrLn $ pp $ fact (lit 3)
+
+instance PP Bool where pp = show . fromEnum
+instance Ty Bool where
+  ty _ = "i1"
+  toULit = LBool
+  fromULit (LBool a) = a
+  
+-- instance PP Word where pp = show
+-- instance Ty Word where ty _ = "i32"
+-- instance PP Float where pp = show
+-- instance Ty Float where ty _ = "float"
+-- instance TyCmp Int where cmpRec = cmpRecSInt
+-- instance TyNum Int where arithRec = arithRecSInt
+-- instance TyCmp Word where cmpRec = cmpRecUInt
+-- instance TyNum Word where arithRec = arithRecUInt
+  
+-- true :: Rep r => r Bool
+-- true = lit True
+
+-- false :: Rep r => r Bool
+-- false = lit False
+
+-- fromInteger :: (Rep r, TyNum a) => Integer -> r a
+-- fromInteger = lit . P.fromInteger
+
+-- foo :: (Rep r, TyNum a) => r a -> r a
+-- foo x = if' (x < 0) (negate x) x
+
+-- bar :: (Rep r, TyBits a) => r a -> r a
+-- bar x = if' (x < 0) (negate x) (x .<< 2)
+
+-- negate :: (Rep r, TyNum a) => r a -> r a
+-- negate = (-) 0
+
+--   -- fold :: r (Stream a) -> r b -> (r a -> r b -> r b) -> r b
+--   -- stream :: r a -> (r a -> r Bool) -> (r a -> r a) -> r (Stream a)
+
+-- newtype MaxBV a = MaxBV{ unMaxBV :: Word } deriving Show
+
+-- -- maximumBV :: [MaxBV a] -> MaxBV a
+-- -- maximumBV = P.maximum . fmap unMaxBV
+
+-- instance Rep MaxBV where
+--   lit _ = MaxBV undefined
+--   bvar _ = MaxBV undefined
+--   if' x y z = MaxBV $ P.maximum [ unMaxBV x, unMaxBV y, unMaxBV z]
+--   while _ _ f g h = MaxBV $ undefined P.+ n
+--     where
+--       p = f a
+--       a1 = g a
+--       b1 = h a b
+--       a = bvar n
+--       b = bvar (P.succ n)
+--       n = P.maximum [ unMaxBV p, unMaxBV a1, unMaxBV b1 ]
+--   (+) = maxBVBinop
+--   (-) = maxBVBinop
+--   (*) = maxBVBinop
+--   (/) = maxBVBinop
+--   (%) = maxBVBinop
+--   (.<<) = maxBVBinop
+--   (.>>) = maxBVBinop
+--   (.|) = maxBVBinop
+--   (.&) = maxBVBinop
+--   (.^) = maxBVBinop
+--   (==) = maxBVBinop
+--   (/=) = maxBVBinop
+--   (>) = maxBVBinop
+--   (<) = maxBVBinop
+--   (>=) = maxBVBinop
+--   (<=) = maxBVBinop
+
+-- maxBVBinop :: MaxBV a -> MaxBV b -> MaxBV c
+-- maxBVBinop x y = MaxBV $ P.maximum [unMaxBV x, unMaxBV y]
+
+-- fact n = while n 1 (\a -> a > 1) (\a -> a - 1) (*)
+
+-- type Stmt = String
+-- newtype Name = Name{ unName :: Word }
+--   deriving (P.Ord, P.Eq)
+
+-- hash :: H.Hashable a => a -> Name
+-- hash = Name . fromIntegral . H.hash
+
+-- data Node = Node
+--   { ppNode :: String
+--   , deps :: S.Set Name
+--   }
+
+-- newtype LLVM a = LLVM{ unLLVM :: Either (Name, Map Name Node) a }
+
+-- instance P.Eq a => P.Eq (LLVM a) where
+--   (==) x y = case (unLLVM x, unLLVM y) of
+--     (Left a, Left b) -> fst a P.== fst b
+--     (Right a, Right b) -> a P.== b
+--     _ -> False
+  
+-- instance PP Name where pp = (++) "%v" . show . unName
+                       
+-- ssa :: PP a => LLVM a -> (String, Maybe Name, Map Name Node)
+-- ssa x = case unLLVM x of
+--   Left (a, b) -> (pp a, Just a, b)
+--   Right a -> (pp a, Nothing, empty)
+
+-- unused :: a
+-- unused = error "unused"
+
+-- binop :: (Ty a, Ty b, Ty c) => (a -> b -> c) -> [String] -> LLVM a -> LLVM b -> LLVM c
+-- binop (f :: a -> b -> c) ss x y = case (unLLVM x, unLLVM y) of
+--   (Right a, Right b) -> lit $ f a b
+--   _ -> stmt [ssa x, ssa y] $
+--        \[ppa, ppb] -> commaSep [ss ++ [ty (unused :: c), ppa ], [ppb] ]
+
+wrapFlags = "nuw nsw"
+fastMathFlags = ""
+
+-- commaSep = concat . intersperse ", " . fmap unwords
+
+-- stmt xs f = LLVM $ Left (v, insert v (Node d (S.fromList $ catMaybes ns)) $ unions ms)
+--   where
+--     d = f pps
+--     v = hash d
+--     (pps, ns, ms) = unzip3 xs
+
+-- succ :: (Rep r, TyNum a) => r a -> r a
+-- succ = (+) 1
+
+-- bitsRecSInt :: (TyBits a) => BitsRec a
+-- bitsRecSInt = BitsRec
+--   { _shl = binop (\a b -> shiftL a (fromIntegral b)) ["shl", wrapFlags]
+--   , _shr = binop (\a b -> shiftR a (fromIntegral b)) ["ashr", wrapFlags]
+--   , _and = binop (.&.) ["and"]
+--   , _or = binop (.|.) ["or"]
+--   , _xor = binop Data.Bits.xor ["xor"]
+--   }
+
+-- bitsRecUInt :: (TyBits a) => BitsRec a
+-- bitsRecUInt = bitsRecSInt
+--   { _shr = binop (\a b -> shiftR a (fromIntegral b)) ["lshr", wrapFlags]
+--   }
+  
+-- arithRecSInt :: (TyNum a, P.Integral a) => ArithRec a
+-- arithRecSInt = ArithRec
+--   { _add = binop (P.+) ["add", wrapFlags]
+--   , _sub = binop (P.-) ["sub", wrapFlags]
+--   , _mul = binop (P.*) ["mul", wrapFlags]
+--   , _div = binop P.div ["sdiv"]
+--   , _rem = binop P.rem ["srem"]
+--   }
+
+-- cmpRecSInt :: TyCmp a => CmpRec a
+-- cmpRecSInt = CmpRec
+--   { _eq = binop (P.==) ["icmp", "eq"]
+--   , _ne = binop (P./=) ["icmp", "ne"]
+--   , _gt = binop (P.>) ["icmp", "sgt"]
+--   , _ge = binop (P.>=) ["icmp", "sge"]
+--   , _lt = binop (P.<) ["icmp", "slt"]
+--   , _le = binop (P.<=) ["icmp", "sle"]
+--   }
+
+-- cmpRecUInt :: TyCmp a => CmpRec a
+-- cmpRecUInt = cmpRecSInt
+--   { _gt = binop (P.>) ["icmp", "ugt"]
+--   , _ge = binop (P.>=) ["icmp", "uge"]
+--   , _lt = binop (P.<) ["icmp", "ult"]
+--   , _le = binop (P.<=) ["icmp", "ule"]
+--   }
+
+-- cmpRecFloat :: TyCmp a => CmpRec a
+-- cmpRecFloat = CmpRec
+--   { _eq = binop (P.==) ["fcmp", "ueq"]
+--   , _ne = binop (P./=) ["fcmp", "une"]
+--   , _gt = binop (P.>) ["fcmp", "ugt"]
+--   , _ge = binop (P.>=) ["fcmp", "uge"]
+--   , _lt = binop (P.<) ["fcmp", "ult"]
+--   , _le = binop (P.<=) ["fcmp", "ule"]
+--   }
+  
+-- arithRecUInt :: (TyNum a, P.Integral a) => ArithRec a
+-- arithRecUInt = arithRecSInt
+--   { _div = binop P.div ["udiv"]
+--   , _rem = binop P.rem ["urem"]
+--   }
+
+-- arithRecFloat :: (TyNum a, P.Fractional a) => ArithRec a
+-- arithRecFloat = ArithRec
+--   { _add = binop (P.+) ["fadd", fastMathFlags]
+--   , _sub = binop (P.-) ["fsub", fastMathFlags]
+--   , _mul = binop (P.*) ["fmul", fastMathFlags]
+--   , _div = binop (P./) ["fdiv", fastMathFlags]
+--   , _rem = binop undefined ["frem", fastMathFlags]
+--   }
+
+-- instance Rep LLVM where
+--   lit = LLVM . Right
+--   if' x (y :: LLVM a) z = case unLLVM x of
+--     Right True -> y
+--     Right False -> z
+--     _ | y P.== z -> y
+--     _ -> stmt [ssa x, ssa y, ssa z] $ \[ppa, ppb, ppc] ->
+--            commaSep [ ["select i1", ppa], [t, ppb], [t, ppc] ]
+--     where
+--       t = ty (unused :: a)
+
+--   (+) = _add arithRec
+--   (-) = _sub arithRec
+--   (*) = _sub arithRec
+--   (/) = _sub arithRec
+--   (%) = _sub arithRec
+  
+--   (.<<) = _shl bitsRec
+--   (.>>) = _shr bitsRec
+--   (.|) = _or bitsRec
+--   (.&) = _and bitsRec
+--   (.^) = _xor bitsRec
+  
+--   (==) = _eq cmpRec
+--   (/=) = _ne cmpRec
+--   (>) = _gt cmpRec
+--   (<) = _lt cmpRec
+--   (>=) = _ge cmpRec
+--   (<=) = _le cmpRec
+  
+{-
+data Cov a = Cov (SBV a) [Symbolic ()]
+
+mkCov x = Cov x []
+
+if' :: SymWord a => Cov Bool -> Cov a -> Cov a -> Cov a
+if' (Cov a bs) (Cov c ds) (Cov e fs) =4
+  Cov (ite a c e) $
+  bs ++ g a ds ++ g (bnot a) fs
+  where
+    g x ys = if null ys then [ constrain x ] else [ constrain x >> y | y <- ys ]
+
+instance (SymWord a, Num a) => Num (Cov a) where
+  fromInteger = mkCov . fromInteger
+  (*) = binop (*)
+  (+) = binop (+)
+  abs = unop abs
+  signum = unop signum
+  negate = unop negate
+  (-) = binop (-)
+  
+unop :: (SBV a -> SBV b) -> Cov a -> Cov b
+unop f (Cov a bs) = Cov (f a) bs
+
+binop :: (SBV a -> SBV b -> SBV c) -> Cov a -> Cov b -> Cov c
+binop f (Cov a bs) (Cov c ds) = Cov (f a c) $ bs ++ ds
+
+(>.) :: SymWord a => Cov a -> Cov a -> Cov Bool
+(>.) = binop (.>)
+(==.) :: SymWord a => Cov a -> Cov a -> Cov Bool
+(==.) = binop (.==)
+
+foo = func $ \(x :: Cov Word32) (y :: Cov Word32) ->
+  if' (x >. 5) (if' (x >. 10) 42 5) ((if' (x >. 6) x 13) * (if' (y ==. 0) y 12))
+
+mIO :: IO a -> IO (Maybe a)
+mIO m = catch (Just <$> m) $ \(_ :: SomeException) -> return Nothing
+
+var :: SymWord a => String -> Symbolic (Cov a)
+var s = mkCov <$> free s
+  
+func :: (SymWord a, SymWord b) => (Cov a -> Cov b -> Cov c) -> IO [SatResult]
+func f = loop [] 0
+  where
+    loop rs i = do
+      mr <- mIO $ sat $ do
+        x <- var "x"
+        y <- var "y"
+        let Cov _ cs = f x y
+        case drop i cs of
+          [] -> error "func"
+          (a:_) -> a >> return (true :: SBool)
+      case mr of
+       Just r -> loop (r:rs) $ succ i
+       Nothing -> return rs
+-}
+
+{-
 module Main where
 
 import Shoot
@@ -174,3 +1103,4 @@ fastpow b e =
 -- --  (+) (var 0 :: E Double) (var 0 :: E Double)
 -- --  max (var 0 :: E Int) (var 1)
 -- --  fastpow (var 0 :: E Int) (var 1 :: E Word)
+-}
