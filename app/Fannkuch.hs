@@ -46,7 +46,7 @@ fkReverse v0 = maskMerge (rev v r) v0 (shl4 n0 maxV16W4)
       )
 
 fkFlip :: (Arith a, Agg a) => V16W4 -> a
-fkFlip v0 = while_ (v0, 0) $ \(v,n) ->
+fkFlip v0 = while_ (v0, 0) $ \(v,n) -> -- BAL: no reason for n here...
   ( ix v 0 > 1
   , (fkReverse v, n + 1)
   )
