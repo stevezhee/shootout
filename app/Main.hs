@@ -1,30 +1,31 @@
 -- {-# LANGUAGE IncoherentInstances #-}
 -- {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DeriveGeneric          #-}
+{-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RebindableSyntax #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE RebindableSyntax       #-}
+{-# LANGUAGE ScopedTypeVariables    #-}
 -- {-# LANGUAGE FlexibleContexts #-}
 
 
 module Main where
 
-import qualified Data.Bits as B
-import           Data.Bits hiding (xor)
-import           Prelude hiding (foldr, maximum, concat) -- hiding (fromInteger, (+), (-), (*), (/), (>), (<), (>=), (<=), (==), (/=), div, rem, or, and)
+import           Data.Bits              hiding (xor)
+import qualified Data.Bits              as B
+import           Prelude                hiding (concat, foldr, maximum)
 -- import           Data.Bits hiding (xor)
-import Data.Hashable (Hashable)
-import qualified Data.Hashable as H
--- import           Data.List (intersperse)
-import           Data.Map (Map)
-import qualified Data.Map as M
+import           Data.Hashable          (Hashable)
+import qualified Data.Hashable          as H
+import           Data.List (sort) -- intersperse)
+import           Data.Map.Strict               (Map)
+import qualified Data.Map.Strict               as M
 import           Data.Maybe
 -- import qualified Data.Set as S
-import           Data.Word
-import qualified Prelude as P
 import           Control.Monad.Identity
+import           Data.Word
+import qualified Prelude                as P
+import Data.Graph hiding (Tree, Node)
 -- import           T
 -- -- import           Prelude (fromIntegral, undefined, Either(..), ($), unwords, fmap, (.), (++), String, error, Bool(..), show, concat, unzip3, fst, Float, Int, fromEnum, print, Integer, Show, Num)
 -- import           Prelude hiding ((==), (/=), (>), (<), (>=), (<=), (+), (-), (*), (/), (%), (^), abs, fromInteger, fromRational, pi, sqrt, negate, sum, succ, pred)
@@ -32,31 +33,120 @@ import           Debug.Trace
 -- instance TyCmp Int Bool where cmpRec = cmpRecA
 -- class TyCmp a b | a -> b where cmpRec :: CmpRec a b
 -- instance Rep r => TyCmp (r Int) (r Bool) where cmpRec = cmpRecR
-import Data.Functor
-import Data.Traversable
-import Data.Foldable
-import Control.Applicative
-import GHC.Generics (Generic)
+import           Control.Applicative
+import           Data.Foldable
+import           Data.Functor
+import           Data.Traversable
+import           GHC.Generics           (Generic)
 
-type UAExp = AExp ULit
+instance TyNum Int
+instance TyCmp Int
 
-data ULit
-  = LInt Int
-  | LWord Word
-  | LBool Bool
-  deriving (Show, Generic, Eq, Ord)
-instance Hashable ULit
+{-
+fact :: E Int -> E Int
+fact n = snd $ while (n, lit 1) $ \(a,b) -> (a `gt` lit 0, (a `sub` lit 1, a `mul` b))
+-}
+
+mkEdge :: (Hash, UCExp) -> ((Hash, UCExp), Hash, [Hash])
+mkEdge x@(a, Op _ bs) = (x, a, [ i | BVar i <- bs ] )
+
+foo :: (Hash, UCExp) -> Map Hash Pred -> Map Hash Pred
+foo (x, y) = \tbl ->
+  let p = ulookup x tbl in
+  case y of
+    Op "if" [a,b,c] ->
+      evalWhen p a $
+      evalWhen (p `pAnd` IsTrue a) b $
+      evalWhen (p `pAnd` pNot (IsTrue a)) c tbl
+    Op _ bs -> foldr ($) tbl (map (evalWhen p) bs)
+
+bar :: AExp a -> [(Hash, UCExp)] -> Map Hash Pred
+bar (BVar i) xs = foldr foo tbl xs where tbl = M.fromList $ [ (a, PFalse) | (a,_) <- xs ] ++ [(i, PTrue)]
+bar _ _ = M.empty
+
+topSortCExps x = [ d | (d, _, _) <- map g $ topSort gr ]
+  where
+    (gr, g) = graphFromEdges' $ fmap mkEdge $ M.toList $ cexps x
+
+ppFoo x y p = case y of
+  Op "if" [a,b,c] -> case p' of
+    PTrue -> ppAssign (x, b)
+    PFalse -> ppAssign (x, c)
+    _ -> "if(" ++ pp p' ++ ") { " ++ ppAssign (x, b) ++ " } else { " ++ ppAssign (x, c) ++ " }"
+    where p' = p `pAnd` IsTrue a
+  Op{} -> case p of
+    PTrue -> ppAssign (x, y)
+    PFalse -> "// always false: " ++ ppAssign (x, y)
+    _ -> "if(" ++ pp p ++ ") { " ++ ppAssign (x, y) ++ " }"
+
+main = do
+  -- mapM_ print ds
+--  mapM_ print $ sort $ concatMap foo $ M.toList $ cexps x
+  let ds = sort $ M.toList $ cexps x
+  let tbl = bar (aexp x) ds
+  mapM_ putStrLn [ ppFoo a b $ ulookup a tbl | (a,b) <- ds ]
+  putStrLn $ "return " ++ pp (aexp x)
+  -- putStrLn $ pp x
+  where
+    x = renameE $ if' c ((a `sub` lit 1) `mod'` b) (if' c (a `div'` b) (a `mul` a))
+    a = add (lit 42) (lit 7) :: E Int
+    b = mul (lit 24) (lit 5) :: E Int
+    c = a `gt` lit 0
+
+pNot (PNot a) = a
+pNot PFalse = PTrue
+pNot PTrue = PFalse
+pNot (PAnd a b) = pOr (pNot a) (pNot b)
+pNot (POr a b) = pAnd (pNot a) (pNot b)
+pNot a = PNot a
+
+data Pred =
+  PFalse | PTrue | PNot Pred | IsTrue UAExp | PAnd Pred Pred | POr Pred Pred
+  deriving (Show, Eq)
+
+instance PP Pred where
+  pp x = case x of
+    PFalse -> "false"
+    PTrue -> "true"
+    IsTrue a -> pp a
+    PNot a -> "not " ++ pp a
+    PAnd a b -> "(" ++ pp a ++ " && " ++ pp b ++ ")"
+    POr a b -> "(" ++ pp a ++ " || " ++ pp b ++ ")"
+    
+ulookup k tbl = fromMaybe (error ("unknown key:" ++ show tbl)) $ M.lookup k tbl
+
+pAnd _ PFalse = PFalse
+pAnd a PTrue = a
+pAnd PFalse _ = PFalse
+pAnd PTrue b = b
+pAnd a b | a == b = a
+pAnd (PNot a) b | a == b = PFalse
+pAnd a (PNot b) | a == b = PFalse
+pAnd a b = PAnd a b
+
+pOr a PFalse = a
+pOr PFalse b = b
+pOr _ PTrue = PTrue
+pOr PTrue _ = PTrue
+pOr a b = POr a b
+
+evalWhen p (BVar i) tbl = M.adjust (pOr p) i tbl
+evalWhen _ _ tbl = tbl
+    
+instance PP Bool where pp = show . fromEnum
+instance Ty Bool where
+  ty _ = "i1"
+  toULit = LBool
+  fromULit (LBool a) = a
 
 toUAExp :: Ty a => AExp a -> UAExp
 toUAExp x = case x of
   BVar a -> BVar a
-  HVar a -> HVar a
   Lit a -> Lit $ toULit a
-  
+
 fromUAExp :: Ty a => UAExp -> AExp a
 fromUAExp x = case x of
   BVar a -> BVar a
-  HVar a -> HVar a
   Lit a -> Lit $ fromULit a
 
 toUE :: Ty a => E a -> UE
@@ -65,32 +155,18 @@ toUE x = x{ aexp = toUAExp $ aexp x }
 fromUE :: Ty a => UE -> E a
 fromUE x = x{ aexp = fromUAExp $ aexp x }
 
-type UE = E ULit
-data E a = E
-  { maxBV :: Word
-  , cexps :: Map Hash UCExp
-  , aexp :: AExp a
-  } deriving Show
-
 debug :: Show a => a -> b -> b
 debug x = trace (show x)
 
+ppAssign (k, v) = unwords [ ppBVar k, "=", pp v ]
+
 instance Ty a => PP (E a) where
   pp x = unlines
-    [ pp $ aexp a'
-    , unlines
-        [ unwords [ pp $ f $ HVar k, "=", pp v ]
-        | (k, v) <- M.toList $ cexps a'
-        ]
+    [ pp $ aexp x
+    , unlines $ map ppAssign $ sort $ M.toList $ cexps x
     ]
-    where
-      a = toUE x
-      tbl = M.fromList $ zip (map HVar $ M.keys $ cexps a) $ map BVar [0 .. ]
-      f = subst tbl
-      a' = rename f a
-      
-ppBVar = (++) "%b" . show
-ppHVar = (++) "%h" . show
+
+ppBVar = (++) "%v" . show
 
 instance PP ULit where
   pp x = case x of
@@ -108,7 +184,6 @@ instance PP a => PP (AExp a) where
   pp x = case x of
     Lit a -> pp a
     BVar a -> ppBVar a
-    HVar a -> ppHVar a
 
 uaexp :: Ty a => E a -> UAExp
 uaexp = toUAExp . aexp
@@ -133,15 +208,32 @@ zipTree x y = case (x, y) of
 -- subst :: Map BVar BVar -> BVar -> BVar
 -- subst tbl k = fromMaybe k $ M.lookup k tbl
 
+assert :: String -> Bool -> a -> a
+assert s a b = case a of
+  True -> b
+  False -> error ("assert failed:" ++ s)
+
 type BVar = Word
 
-rename :: (UAExp -> UAExp) -> UE -> UE
-rename f e = e{ cexps = fmap g $ cexps e, aexp = f $ aexp e }
+renameE :: Ty a => E a -> E a
+renameE x = fromUE $ rename f a
   where
-    g (Op a bs) = Op a $ fmap f bs
-
+    a = toUE x
+    tbl = M.fromList $ zip (fmap fst $ reverse $ topSortCExps a) [0 .. ]
+    f = subst tbl
+  
+rename :: (Word -> Word) -> UE -> UE
+rename f e = e{ cexps = M.mapKeys f $ fmap h $ cexps e, aexp = g $ aexp e }
+  where
+    h :: UCExp -> UCExp
+    h (Op a bs) = Op a $ fmap g bs
+    g a = case a of
+      BVar v -> BVar $ f v
+      _ -> a
+    
 subst tbl k = fromMaybe k $ M.lookup k tbl
 
+{-
 while :: Agg a => a -> (a -> (E Bool, a)) -> a
 while x f =
   -- agg $ fmap (mapUE (subst $ mkSubstTbl (fmap aexp ubvs) $ fmap aexp t)) t
@@ -158,7 +250,7 @@ while x f =
       where
         v = Op "phi" [aexp e, b, c]
         k = hash v
-        
+
 mkWhile :: (Agg a) => a -> (a -> (E Bool, a)) -> (Tree (UAExp, (UAExp, UAExp)), UE)
 mkWhile x f =
   ( t
@@ -168,13 +260,13 @@ mkWhile x f =
      }
   )
   where
-    t = zipTree (uaexpAgg bvs) $ zipTree (uaexpAgg x) (uaexpAgg x') 
+    t = zipTree (uaexpAgg bvs) $ zipTree (uaexpAgg x) (uaexpAgg x')
     k = hash v
     v = Op "while" $ uaexp p : concat [ [a,b,c] | (a,(b,c)) <- toList t ]
     n = max (maxBV p) (maxBVAgg x')
     (i, bvs) = inst n x
     (p, x') = f bvs
-
+-}
 
 if' :: Agg a => E Bool -> a -> a -> a
 if' x y z = agg $ fmap (mkIf x) $ zipTree (unAgg y) (unAgg z)
@@ -183,19 +275,37 @@ mkIf :: E Bool -> (UE, UE) -> UE
 mkIf x (y,z) = E
   { maxBV = maximum [maxBV x, maxBV y, maxBV z]
   , cexps = M.insert k v $ M.unions [cexps x, cexps y, cexps z]
-  , aexp = HVar k
+  , aexp = BVar k
   }
   where
     v = Op "if" [uaexp x, aexp y, aexp z]
     k = hash v
-      
+
+sub :: TyNum a => E a -> E a -> E a
+sub = binop (-) $ wrapFlags "sub"
+
+add :: TyNum a => E a -> E a -> E a
+add = binop (-) $ wrapFlags "add"
+
+gt :: TyCmp a => E a -> E a -> E Bool
+gt = binop (>) ["gt"] -- ["icmp", "sgt"]
+
+mul :: TyNum a => E a -> E a -> E a
+mul = binop (*) $ wrapFlags "mul"
+
+div' :: TyNum a => E a -> E a -> E a
+div' = binop (*) $ wrapFlags "div"
+
+mod' :: TyNum a => E a -> E a -> E a
+mod' = binop (*) $ wrapFlags "mod"
+
 binop :: (Ty a, Ty b, Ty c) => (a -> b -> c) -> [String] -> E a -> E b -> E c
 binop f ss x y = case (aexp x, aexp y) of
-  (Lit a, Lit b) -> lit $ f a b
+  -- (Lit a, Lit b) -> lit $ f a b -- BAL: put back in
   _ -> E
     { maxBV = maximum [maxBV x, maxBV y]
     , cexps = M.insert k v $ M.unions [cexps x, cexps y]
-    , aexp = HVar k
+    , aexp = BVar k
     }
   where
     v = Op (unwords ss) [uaexp x, uaexp y]
@@ -206,7 +316,7 @@ bvar = E 0 M.empty . BVar
 
 lit :: Ty a => a -> E a
 lit = E 0 M.empty . Lit
-  
+
 class Agg a where
   agg :: Tree UE -> a
   unAgg :: a -> Tree UE
@@ -216,7 +326,7 @@ instance Ty a => Agg (E a) where
   agg (Leaf a) = fromUE a
   unAgg = Leaf . toUE
   inst i _ = (succ i, bvar i)
-    
+
 instance (Agg a, Agg b) => Agg (a,b) where
   agg (Node [a,b]) = (agg a, agg b)
   unAgg (a,b) = Node [unAgg a, unAgg b]
@@ -235,12 +345,12 @@ instance (Agg a, Agg b) => Agg (a,b) where
 --   agg (Leaf x) = toA x
 --   unAgg = Leaf . fromA
 --   inst (_ :: u) i _ = (succ i, (bvar :: Rep r u => Word -> r a) i)
-  
+
 -- instance (Agg a u, Agg b u) => Agg (a, b) u where
 --   agg (Node [a, b]) = (agg a, agg b)
 --   unAgg (a, b) = Node [unAgg a, unAgg b]
--- --  
-  
+-- --
+
 -- class Rep r u | u -> r where
 --   toA :: u -> r a
 --   fromA :: r a -> u
@@ -253,18 +363,40 @@ instance Ty Int where
   toULit = LInt
   fromULit (LInt a) = a
 
-data AExp a = Lit a | HVar Word | BVar Word deriving (Show, Generic, Eq, Ord)
+data ULit
+  = LInt Int
+  | LWord Word
+  | LBool Bool
+  deriving (Show, Generic, Eq, Ord)
+instance Hashable ULit
+
+data AExp a = Lit a | BVar Word deriving (Show, Generic, Eq, Ord)
 instance Hashable a => Hashable (AExp a)
 
--- type UAExp = AExp Lit
+type UAExp = AExp ULit
 
-data UCExp
-  = Op String [UAExp]
-    deriving (Show, Generic)
+data UCExp = Op String [UAExp] deriving (Show, Generic, Eq, Ord)
 instance Hashable UCExp
 
 type Hash = Word
 
+type UE = E ULit
+data E a = E
+  { maxBV :: Word
+  , cexps :: Map Hash UCExp
+  , aexp  :: AExp a
+  } deriving Show
+
+-- data Eval = Eval Hash | EvalAnd Hash Hash | EvalAndNot Hash Hash deriving (Show, Eq, Ord)
+
+-- foo :: (Hash, UCExp) -> [(Hash, Eval)]
+-- foo (x,y) = catMaybes $ case y of
+--   Op "if" [a@(HVar i),b,c] -> [ f a $ Eval x, f b $ EvalAnd x i, f c $ EvalAndNot x i ]
+--   Op _ bs -> map (flip f $ Eval x) bs
+--   where
+--     f (HVar i) e = Just (i, e)
+--     f _ _ = Nothing
+  
 hash :: UCExp -> Hash
 hash = fromIntegral . H.hash
 
@@ -273,7 +405,7 @@ class (Ty a, Ord a) => TyCmp a
 
 data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq, Generic)
 instance Hashable a => Hashable (Tree a)
-    
+
 instance Foldable Tree where
   foldr f b x = case x of
     Leaf a -> f a b
@@ -294,13 +426,13 @@ class PP a => Ty a where
   ty :: a -> String
   toULit :: a -> ULit
   fromULit :: ULit -> a
-  
+
 -- fooBinop :: (Ty a, Ty b, Ty c) => (a -> b -> c) -> E a -> E b -> E c
 -- fooBinop f x y = case (unLit x, unLit y) of
 --   (Just a, Just b) -> lit $ f a b
-  
+
 --                       -- undefined -- Exp $ max (maxBV x) (maxBV y)
-  
+
 -- lengthAgg :: Agg a => a -> Word
 -- lengthAgg = snd . inst 0
 
@@ -309,13 +441,13 @@ class PP a => Ty a where
 --   uninst (Leaf i) = bvar i
 --   inst i _ = (Leaf i, i + 1)
 -- --  maxBVAgg = maxBV
-  
+
 -- instance (Agg a, Agg b) => Agg (a, b) where
 --   mkR (Node [a, b]) = (mkR a, mkR b)
 --   uninst (Node [a,b]) = (uninst a, uninst b)
 --   inst i (x, y) = let (a, j) = inst i x in let (b, k) = inst j y in (Node [a, b], k)
 --   maxBVAgg (x, y) = max (maxBVAgg x) (maxBVAgg y)
-  
+
 -- class Rep r where
 --   lit :: Ty a => a -> r a
 --   bvar :: Ty a => Word -> r a
@@ -353,21 +485,6 @@ class PP a => Ty a where
   -- mul = fooBinop (*)
   -- gt = fooBinop (>)
 
-instance TyNum Int
-instance TyCmp Int
-
-fact :: E Int -> E Int
-fact n = snd $ while (n, lit 1) $ \(a,b) -> (a `gt` lit 0, (a `sub` lit 1, a `mul` b))
-
-sub :: TyNum a => E a -> E a -> E a
-sub = binop (-) ["sub", wrapFlags]
-
-gt :: TyCmp a => E a -> E a -> E Bool
-gt = binop (>) ["icmp", "sgt"]
-
-mul :: TyNum a => E a -> E a -> E a
-mul = binop (*) ["mul", wrapFlags]
-
 -- fact2 :: E Int -> E Int
 -- fact2 n = snd $ while (n, lit 1) $ \(a,b) -> (a `gt` lit 0, (a `sub` lit 1, if' (a `gt` lit 10) (fact (a `mul` b)) (a `sub` b)))
 
@@ -377,7 +494,7 @@ mul = binop (*) ["mul", wrapFlags]
 
 -- class Rep r where
 --   lit :: a -> r a
-  
+
 -- class Agg a where
 --   while :: Rep r => a -> (a -> (r Bool, a)) -> a
 --   fun :: Rep r => String -> (a -> r b) -> a -> r b
@@ -410,7 +527,7 @@ mul = binop (*) ["mul", wrapFlags]
 --   (*) :: Num a => r a -> r a -> r a
 --   (>) :: Ord a => r a -> r a -> r Bool
 --   (<) :: Ord a => r a -> r a -> r Bool
-    
+
 -- binopI :: (a -> b -> c) -> Identity a -> Identity b -> Identity c
 -- binopI f x y = f <$> x <*> y
 
@@ -436,7 +553,7 @@ mul = binop (*) ["mul", wrapFlags]
 --   (*) = binopI (P.*)
 --   (>) = binopI (P.>)
 --   (<) = binopI (P.<)
-  
+
 -- data CmpRec a b = CmpRec
 --   { _if :: b -> a -> a -> a
 --   , _eq :: a -> a -> b
@@ -566,7 +683,7 @@ class Rep r where
   xor :: r a -> r a -> r a
 
 class TyNum a => TyBits a where bitsRec :: BitsRec a
-                       
+
 numRecR :: (Rep r, TyNum a) => NumRec (r a)
 numRecR = NumRec
   { _fromInteger = lit . fromInteger
@@ -651,14 +768,7 @@ tt :: (TyCmp a b, TyBits a) => a
 tt = t 3
 
 -}
-main = putStrLn $ pp $ fact (lit 3)
 
-instance PP Bool where pp = show . fromEnum
-instance Ty Bool where
-  ty _ = "i1"
-  toULit = LBool
-  fromULit (LBool a) = a
-  
 -- instance PP Word where pp = show
 -- instance Ty Word where ty _ = "i32"
 -- instance PP Float where pp = show
@@ -667,7 +777,7 @@ instance Ty Bool where
 -- instance TyNum Int where arithRec = arithRecSInt
 -- instance TyCmp Word where cmpRec = cmpRecUInt
 -- instance TyNum Word where arithRec = arithRecUInt
-  
+
 -- true :: Rep r => r Bool
 -- true = lit True
 
@@ -747,9 +857,9 @@ instance Ty Bool where
 --     (Left a, Left b) -> fst a P.== fst b
 --     (Right a, Right b) -> a P.== b
 --     _ -> False
-  
+
 -- instance PP Name where pp = (++) "%v" . show . unName
-                       
+
 -- ssa :: PP a => LLVM a -> (String, Maybe Name, Map Name Node)
 -- ssa x = case unLLVM x of
 --   Left (a, b) -> (pp a, Just a, b)
@@ -764,8 +874,8 @@ instance Ty Bool where
 --   _ -> stmt [ssa x, ssa y] $
 --        \[ppa, ppb] -> commaSep [ss ++ [ty (unused :: c), ppa ], [ppb] ]
 
-wrapFlags = "nuw nsw"
-fastMathFlags = ""
+wrapFlags x = [x] -- "nuw nsw"
+fastMathFlags x = [x] -- ""
 
 -- commaSep = concat . intersperse ", " . fmap unwords
 
@@ -791,7 +901,7 @@ fastMathFlags = ""
 -- bitsRecUInt = bitsRecSInt
 --   { _shr = binop (\a b -> shiftR a (fromIntegral b)) ["lshr", wrapFlags]
 --   }
-  
+
 -- arithRecSInt :: (TyNum a, P.Integral a) => ArithRec a
 -- arithRecSInt = ArithRec
 --   { _add = binop (P.+) ["add", wrapFlags]
@@ -828,7 +938,7 @@ fastMathFlags = ""
 --   , _lt = binop (P.<) ["fcmp", "ult"]
 --   , _le = binop (P.<=) ["fcmp", "ule"]
 --   }
-  
+
 -- arithRecUInt :: (TyNum a, P.Integral a) => ArithRec a
 -- arithRecUInt = arithRecSInt
 --   { _div = binop P.div ["udiv"]
@@ -860,20 +970,20 @@ fastMathFlags = ""
 --   (*) = _sub arithRec
 --   (/) = _sub arithRec
 --   (%) = _sub arithRec
-  
+
 --   (.<<) = _shl bitsRec
 --   (.>>) = _shr bitsRec
 --   (.|) = _or bitsRec
 --   (.&) = _and bitsRec
 --   (.^) = _xor bitsRec
-  
+
 --   (==) = _eq cmpRec
 --   (/=) = _ne cmpRec
 --   (>) = _gt cmpRec
 --   (<) = _lt cmpRec
 --   (>=) = _ge cmpRec
 --   (<=) = _le cmpRec
-  
+
 {-
 data Cov a = Cov (SBV a) [Symbolic ()]
 
@@ -894,7 +1004,7 @@ instance (SymWord a, Num a) => Num (Cov a) where
   signum = unop signum
   negate = unop negate
   (-) = binop (-)
-  
+
 unop :: (SBV a -> SBV b) -> Cov a -> Cov b
 unop f (Cov a bs) = Cov (f a) bs
 
@@ -914,7 +1024,7 @@ mIO m = catch (Just <$> m) $ \(_ :: SomeException) -> return Nothing
 
 var :: SymWord a => String -> Symbolic (Cov a)
 var s = mkCov <$> free s
-  
+
 func :: (SymWord a, SymWord b) => (Cov a -> Cov b -> Cov c) -> IO [SatResult]
 func f = loop [] 0
   where
@@ -979,7 +1089,7 @@ main = do
       -- def $ func "foo" $ \(x :: Word') -> if' (x + 1 < 10) (x + 1) (x + 2)
       -- def $ func "foo" $ \(x :: Word') -> let y = x + 1 in y + y + y
       def $ func "foo" $ \(x :: Word') -> if' (3 + (x + 1) > 10) (2 + (x + 1)) (x + 2)
-      
+
       -- def $ func "foo" $ \(x :: Word') -> if' (x > 0) (if' (x < 10) (x + 1) x) (if' (x + 1 > 42) (x + 1) x)
       -- def $ func "foo" $ \(x :: Bool', y :: Bool') -> if' x (if' x (not' x) x) (if' (not' x) (not' x) x)
       -- defIO nbody
@@ -1000,7 +1110,7 @@ main = do
   -- print a
   printPP a
   return ()
-  
+
 data C1 = C1
 instance Count C1 where countof _ = 1
 
@@ -1078,7 +1188,7 @@ fastpow b e =
 --   -- printC t
 --   printPP t
 --   print $ smtEval t
-  
+
 -- -- main = compile $
 -- --   spctMain C1
 --   -- let arr :: E (V C4 Int) = vec [5 .. ] in
