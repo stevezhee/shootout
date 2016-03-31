@@ -1,3 +1,6 @@
+// clang t.c -lcygwin -lSDL2main -lSDL2
+
+#include <stdio.h>
 #include <SDL2/SDL.h>
 
 int main(int argc, char *argv[]) {
@@ -16,8 +19,8 @@ int main(int argc, char *argv[]) {
     screenSurface = SDL_GetWindowSurface(win);
     if(!screenSurface)
       {
-	printf("%s\n", SDL_GetError());
-	goto cleanup3;
+ 	printf("%s\n", SDL_GetError());
+ 	goto cleanup3;
       }
     renderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
     if(!renderer)
@@ -27,11 +30,11 @@ int main(int argc, char *argv[]) {
       }
     SDL_SetRenderDrawColor( renderer, 0xFF, 0xFF, 0xFF, 0xFF );
 
-    bitmapSurface = SDL_LoadBMP("/home/bletner/Downloads/ship.bmp");
+    bitmapSurface = SDL_LoadBMP("ship.bmp");
     if(!bitmapSurface)
       {
-	printf("%s\n", SDL_GetError());
-	goto cleanup;
+ 	printf("%s\n", SDL_GetError());
+ 	goto cleanup;
       }
     /* bitmapSurface = SDL_ConvertSurface(tempSurface, screenSurface->format, 0); */
     /* SDL_FreeSurface(tempSurface); */
@@ -39,7 +42,7 @@ int main(int argc, char *argv[]) {
     /*   { */
     /* 	printf("%s\n", SDL_GetError()); */
     /* 	goto cleanup; */
-    /*   } */ 
+    /*   } */
     bitmapTex = SDL_CreateTextureFromSurface(renderer, bitmapSurface);
     SDL_Rect rect;
     rect.x = 10;
@@ -62,47 +65,47 @@ int main(int argc, char *argv[]) {
             if (e.type == SDL_QUIT) {
                 break;
             } else {
-	      if (e.type == SDL_KEYDOWN)
-		{
+ 	      if (e.type == SDL_KEYDOWN)
+ 		{
                         switch( e.key.keysym.sym )
                         {
                             case SDLK_UP:
-			      dx = 0;
-			      dy = -1;
+ 			      dx = 0;
+ 			      dy = -1;
                             break;
 
                             case SDLK_DOWN:
-			      dx = 0;
-			      dy = 1;
+ 			      dx = 0;
+ 			      dy = 1;
                             break;
 
                             case SDLK_LEFT:
-			      dx = -1;
-			      dy = 0;
+ 			      dx = -1;
+ 			      dy = 0;
                             break;
 
                             case SDLK_RIGHT:
-			      dx = 1;
-			      dy = 0;
+ 			      dx = 1;
+ 			      dy = 0;
                             break;
 
                             default:
-			      dx = 0;
-			      dy = 0;
+ 			      dx = 0;
+ 			      dy = 0;
                             break;
                         }		}
-	    }
+ 	    }
         }
 
-	/* SDL_BlitSurface(bitmapSurface, NULL, screenSurface, NULL); */
-	/* SDL_UpdateWindowSurface(win); */
-	rect.x += dx;
-	rect.y += dy;
+ 	/* SDL_BlitSurface(bitmapSurface, NULL, screenSurface, NULL); */
+ 	/* SDL_UpdateWindowSurface(win); */
+ 	rect.x += dx;
+ 	rect.y += dy;
 
-	rect.x = rect.x > (width - rect.w) ? (width - rect.w) : rect.x;
-	rect.x = rect.x < 0 ? 0 : rect.x;
-	rect.y = rect.y > (height - rect.h) ? (height - rect.h) : rect.y;
-	rect.y = rect.y < 0 ? 0 : rect.y;
+ 	rect.x = rect.x > (width - rect.w) ? (width - rect.w) : rect.x;
+ 	rect.x = rect.x < 0 ? 0 : rect.x;
+ 	rect.y = rect.y > (height - rect.h) ? (height - rect.h) : rect.y;
+ 	rect.y = rect.y < 0 ? 0 : rect.y;
 
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, bitmapTex, NULL, &rect);
