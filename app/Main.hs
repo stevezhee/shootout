@@ -49,13 +49,14 @@ type M a = StateT St IO a
 data Ptr a = Ptr{ unPtr :: Int }
   deriving (Show, Generic, Eq, Ord)
 
-data Val a = Lit a | BVar String Int | FVar String Int deriving Show
+type Type = String
+
+data Val a = Lit a | Var Type String deriving Show
 
 tyVal :: Ty a => Val a -> String
 tyVal (_ :: Val a) = ty (unused "ty (Val a)" :: a)
 
-ppBVar i = "%v" ++ show i
-ppFVar i = "@g" ++ show i
+ppVar t i = t ++ show i
 
 commaSep = concat . intersperse ", "
 
@@ -75,21 +76,21 @@ instance PP SurfaceT where ppu _ = "somesurface"
 instance PP TextureT where ppu _ = "sometexture"
 instance PP WindowT where ppu _ = "somewindow"
 instance PP RendererT where ppu _ = "somerenderer"
+instance PP RWopsT where ppu _ = "somerenderer"
 instance PP Bool where
   ppu x = case x of
     True -> "true"
     False -> "false"
     
-instance PP Char where ppu = ppu . fromEnum
+instance PP Char where ppu = show . fromEnum
 instance PP Int where ppu = show
 instance PP Word8 where ppu = show
 
-instance Ty a => PP (Ptr a) where ppu = ppu . unPtr -- show in hex
-
+instance Ty a => PP (Ptr a) where ppu = ppPtr . unPtr
+ 
 instance Ty a => PP (Val a) where
   ppu x = case x of
-            BVar _ i -> ppBVar i
-            FVar _ i -> ppFVar i
+            Var _ b -> b
             Lit a -> ppu a
 
 pp x = hcat (tyVal x) $ ppu x
@@ -114,7 +115,7 @@ load x = assign $ \_ -> prim_ "load" [pp x]
 assign :: Ty a => (Val a -> String) -> M (Val a)
 assign (f :: Val a -> String) = do
   i <- fresh
-  let v :: Val a = BVar (tyVal v) i
+  let v :: Val a = bvar (tyVal v) i
   output $ unwords [ppu v, "=", f v]
   return v
 
@@ -205,7 +206,7 @@ type P a = Val (Ptr a)
 withResource :: (Agg a, Ty b) =>
   (a -> M (P b)) -> (P b -> M ()) -> String -> a -> (P b -> M ()) -> M ()
 withResource create destroy s x use =
-  withPtr (create x) (err $ "creating " ++ s) $ \p -> do
+  withPtr (create x) (rerr s) $ \p -> do
     use p
     destroy p
 
@@ -220,18 +221,22 @@ instance Ty WindowT where tyRec = tyRecInt WindowT unWindowT
 data RendererT = RendererT{ unRendererT :: Int }
 instance Ty RendererT where tyRec = tyRecInt RendererT unRendererT
 
+data RWopsT = RWopsT{ unRWopsT :: Int }
+instance Ty RWopsT where tyRec = tyRecInt RWopsT unRWopsT
+
 data TextureT = TextureT{ unTextureT :: Int }
 instance Ty TextureT where tyRec = tyRecInt TextureT unTextureT
 
 data SurfaceT = SurfaceT{ unSurfaceT :: Int }
 instance Ty SurfaceT where tyRec = tyRecInt SurfaceT unSurfaceT
 
-data RectT
-instance Ty RectT
+data RectT = RectT{ unRectT :: Int }
+instance Ty RectT where tyRec = tyRecInt RectT unRectT
 
 type IntT = Val Int
 type Window = P WindowT
 type Renderer = P RendererT
+type RWops = P RWopsT
 type Texture = P TextureT
 type Surface = P SurfaceT
 
@@ -268,8 +273,17 @@ sdlCreateTextureFromSurface = ffi "SDL_CreateTextureFromSurface"
 sdlDestroyTexture :: Texture -> M ()
 sdlDestroyTexture = ffi "SDL_DestroyTexture"
 
+sdlRWFromFile :: (CString, CString) -> M RWops
+sdlRWFromFile = ffi "SDL_RWFromFile"
+
+sdlLoadBMP_RW :: (RWops, IntT) -> M Surface
+sdlLoadBMP_RW = ffi "SDL_LoadBMP_RW"
+
 sdlLoadBMP :: CString -> M Surface
-sdlLoadBMP = ffi "SDL_LoadBMP"
+sdlLoadBMP x = do
+  s <- str "rb"
+  p <- sdlRWFromFile (x, s)
+  sdlLoadBMP_RW (p, int 1)
 
 class Ret b where
   call :: Agg a => Proc a b -> a -> M b
@@ -303,7 +317,10 @@ puts :: CString -> M ()
 puts = ffi "puts"
 
 err :: String -> M ()
-err x = str x >>= puts
+err x = str ("error:" ++ x) >>= puts
+
+rerr :: String -> M ()
+rerr x = err $ "unable to create " ++ x
 
 sdl_renderer_accelerated :: IntT
 sdl_renderer_accelerated = int 0x00000002
@@ -312,6 +329,8 @@ tyString s = ("[" ++ show (length s + 1) ++ " x i8]")
 
 escString :: String -> String
 escString s = "c\"" ++ concatMap escChar (s ++ "\0") ++ "\""
+
+ppPtr i = if i == 0 then "null" else show i
 
 escChar :: Char -> [Char]
 escChar c
@@ -322,7 +341,10 @@ escChar c
     a' = case a of
       [_] -> "0" ++ a
       _ -> a
-    
+
+fvar t i = Var t $ "@g" ++ show i
+bvar t i = Var t $ "%v" ++ show i
+
 str :: String -> M CString
 str s = do
   tbl <- gets strings
@@ -330,7 +352,7 @@ str s = do
     Just v -> return v
     Nothing -> do
       i <- fresh
-      let v = FVar "i8**" i
+      let v = fvar "i8**" i
       modify $ \st -> st{ strings = M.insert s v tbl }
       return v
   load p
@@ -382,18 +404,18 @@ sdlRenderCopy :: (Renderer, Texture, P RectT, P RectT) -> M ()
 sdlRenderCopy = ffi "SDL_RenderCopy"
 sdlRenderClear :: Renderer -> M ()
 sdlRenderClear = ffi "SDL_RenderClear"
-sdlSetRendererDrawColor :: (Renderer, (Word8T, Word8T, Word8T, Word8T)) -> M ()
-sdlSetRendererDrawColor = ffi "SDL_SetRendererDrawColor"
+sdlSetRenderDrawColor :: (Renderer, (Word8T, Word8T, Word8T, Word8T)) -> M ()
+sdlSetRenderDrawColor = ffi "SDL_SetRenderDrawColor"
 
 withBMPTexture :: (Renderer, CString) -> (Texture -> M ()) -> M ()
 withBMPTexture (rndr, n) f = do
   bmp <- sdlLoadBMP n
   r <- bmp `eq` nullptr
-  if' r (err "BMP surface") $ do
+  if' r (rerr "BMP surface") $ do
     tex <- sdlCreateTextureFromSurface(rndr, bmp)
     sdlFreeSurface bmp
     r <- tex `eq` nullptr
-    if' r (err "BMP texture") $ do
+    if' r (rerr "BMP texture") $ do
       f tex
       sdlDestroyTexture tex
 
@@ -405,17 +427,18 @@ withSDL x m = do
   return a
 
 main' :: Proc () IntT
-main' = proc_ "main" $ withSDL sdl_init_video $ do
-  s <- str "Hello World"
-  withWindow (s, ((int 100, int 100), (int 640, int 480)), int 0) $ \win ->
-    withWindowSurface win $ \dest ->
-    withRenderer (win, int (-1), sdl_renderer_accelerated) $ \rndr -> do
-      sdlSetRendererDrawColor (rndr, (w8 0xff, w8 0xff, w8 0xff, w8 0xff))
-      s <- str "ship.bmp"
-      withBMPTexture (rndr, s) $ \ship -> do
-        sdlRenderClear rndr
-        sdlRenderCopy (rndr, ship, nullptr, nullptr)
-        sdlRenderPresent rndr
+main' = proc_ "main" $ do
+  withSDL sdl_init_video $ do
+    s <- str "Hello World"
+    withWindow (s, ((int 100, int 100), (int 640, int 480)), int 0) $ \win ->
+      withWindowSurface win $ \dest ->
+      withRenderer (win, int (-1), sdl_renderer_accelerated) $ \rndr -> do
+        sdlSetRenderDrawColor (rndr, (w8 0xff, w8 0xff, w8 0xff, w8 0xff))
+        s <- str "ship.bmp"
+        withBMPTexture (rndr, s) $ \ship -> do
+          sdlRenderClear rndr
+          sdlRenderCopy (rndr, ship, nullptr, nullptr)
+          sdlRenderPresent rndr
   ret $ int 0
   
 nullptr :: Ty a => Val (Ptr a)
@@ -429,19 +452,17 @@ withPtr m n f = do
   
 ppVal :: UVal -> String
 ppVal x = case x of
-  BVar t i -> hcat t $ ppBVar i
-  FVar t i -> hcat t $ ppFVar i
+  Var t a -> hcat t a
   Lit a -> case a of
     LInt a -> ppt a
     LBool a -> ppt a
-    LPtr t a -> hcat t $ show a -- show in hex
+    LPtr t a -> hcat t $ ppPtr a
     LWord8 a -> ppt a
     LChar a -> ppt a
 
 ppTyVal :: UVal -> String
 ppTyVal x = case x of
-  BVar t _ -> t
-  FVar t _ -> t
+  Var t _ -> t
   Lit a -> case a of
     LInt a -> ty a
     LBool a -> ty a
@@ -474,7 +495,7 @@ freshLabel :: M Label
 freshLabel = Label <$> fresh
   
 label :: Label -> M ()
-label x = output0 (ppLabel x ++ ":")
+label x = output0 (ppULabel x ++ ":")
   
 switch :: Ty a => Val a -> Label -> [(a, Label)] -> M ()
 switch x y zs =
@@ -568,7 +589,7 @@ instance Ty a => Agg (Val a) where
   instantiate = f $ unused "instantiate"
     where
       f :: a -> M (Val a)
-      f a = BVar (ty a) <$> fresh
+      f a = bvar (ty a) <$> fresh
     
 instance (Agg a, Agg b) => Agg (a, b) where
   unAgg (Node [a,b]) = (unAgg a, unAgg b)
@@ -590,14 +611,12 @@ instance (Agg a, Agg b, Agg c, Agg d) => Agg (a, b, c, d) where
  
 unUVal :: Ty a => UVal -> Val a
 unUVal x = case x of
-  BVar t i -> BVar t i
-  FVar t i -> FVar t i
+  Var a b -> Var a b
   Lit a -> Lit $ unULit a
 
 toUVal :: Ty a => Val a -> Val ULit
 toUVal x = case x of
-  BVar t i -> BVar t i
-  FVar t i -> FVar t i
+  Var a b -> Var a b
   Lit a -> Lit $ toULit a
 
 data ULit
@@ -605,7 +624,7 @@ data ULit
   | LWord8{ unLWord8 :: Word8 }
   | LBool{ unLBool :: Bool }
   | LChar{ unLChar :: Char }
-  | LPtr String Int
+  | LPtr Type Int
   deriving (Show, Generic, Eq, Ord)
 
 {-

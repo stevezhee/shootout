@@ -12,6 +12,10 @@ endif
 all :
 	stack install
 	$(EXE)
+	shootout > t.ll
+	llc t.ll
+	clang t.s -lSDL2
+	./a.out
 
 # all : a.exe nbody.exe fannkuch.exe spectral.exe
 # 	ls -al $^
