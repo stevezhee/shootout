@@ -44,6 +44,27 @@ import           GHC.Generics           (Generic)
 import Numeric
 import Data.Char
 
+-- data UVal'
+--   = Var' String
+--   | Undef
+--   | CInt{ unCInt :: Int }
+--   | CWord8{ unCWord8 :: Word8 }
+--   | CBool{ unCBool :: Bool }
+--   | CChar{ unCChar :: Char }
+--   deriving (Show, Generic, Eq, Ord)
+  
+-- data TVal = TVal{ typ :: Type, uval :: UVal' }
+
+-- data V a = V{ unV :: TVal }
+-- data T a = T{ unT :: Type }
+  
+-- class Typ a where
+--   typeof :: T a
+
+-- undef ::
+-- instance Typ Int where
+--   typeof = T "i32"
+    
 type M a = StateT St IO a
 
 data Ptr a = Ptr{ unPtr :: Int }
@@ -53,8 +74,13 @@ type Type = String
 
 data Val a = Lit a | Var Type String deriving Show
 
-tyVal :: Ty a => Val a -> String
-tyVal (_ :: Val a) = ty (unused "ty (Val a)" :: a)
+data ULit
+  = LInt{ unLInt :: Int }
+  | LWord8{ unLWord8 :: Word8 }
+  | LBool{ unLBool :: Bool }
+  | LChar{ unLChar :: Char }
+  | LPtr Type Int
+  deriving (Show, Generic, Eq, Ord)
 
 ppVar t i = t ++ show i
 
@@ -71,12 +97,12 @@ prim :: String -> [String] -> M ()
 prim x = output . prim_ x
 
 class PP a where ppu :: a -> String
-instance PP RectT where ppu _ = "somerect"
-instance PP SurfaceT where ppu _ = "somesurface"
-instance PP TextureT where ppu _ = "sometexture"
-instance PP WindowT where ppu _ = "somewindow"
-instance PP RendererT where ppu _ = "somerenderer"
-instance PP RWopsT where ppu _ = "somerenderer"
+instance PP RectT where ppu _ = undefined
+instance PP SurfaceT where ppu _ = undefined
+instance PP TextureT where ppu _ = undefined
+instance PP WindowT where ppu _ = undefined
+instance PP RendererT where ppu _ = undefined
+instance PP RWopsT where ppu _ = undefined
 instance PP Bool where
   ppu x = case x of
     True -> "true"
@@ -106,16 +132,26 @@ fresh = do
 
 parens xs = "(" ++ commaSep xs ++ ")"
 
-alloca :: Ty a => M (Val (Ptr a))
-alloca = assign $ \v -> prim_ "alloca" [tyVal v]
+alloca :: Ty a => IntT -> M (P a)
+alloca n = assign $ \(v :: P a) -> prim_ "alloca" [tyVal (unused "alloca" :: Val a), pp n]
+
+idx :: Ty a => P a -> IntT -> M (P a)
+idx (x :: P a) n = assign $ \v -> prim_ "getelementptr inbounds" [pp x, pp n]
+
+fld :: (Ty a, Ty b) => P a -> IntT -> M (P b)
+fld (x :: P a) n = assign $ \v -> prim_ "getelementptr inbounds" [pp x, pp $ int 0, pp n]
 
 load :: Ty a => Val (Ptr a) -> M (Val a)
 load x = assign $ \_ -> prim_ "load" [pp x]
+
+-- declareType :: UVal -> M ()
+-- declareType = undefined
 
 assign :: Ty a => (Val a -> String) -> M (Val a)
 assign (f :: Val a -> String) = do
   i <- fresh
   let v :: Val a = bvar (tyVal v) i
+  -- declareType $ toUVal v
   output $ unwords [ppu v, "=", f v]
   return v
 
@@ -123,7 +159,7 @@ add :: Ty a => Val a -> Val a -> M (Val a)
 add x y = assign $ \_ -> prim_ "add" [pp x, ppu y]
   
 data Label = Label{ unLabel :: Int } deriving Show
-  
+
 -- foo = proc "foo" $ \(a,b) -> do
 --   store (int 4) a
 --   v <- load a
@@ -141,10 +177,19 @@ data St = St
   { next :: Int
   , strings :: Map String (Val (Ptr (Ptr Char)))
   , decls :: Set String
+  , structs :: Map [Type] Type
   } deriving Show
-  
-exec = flip execStateT $ St 0 M.empty S.empty
 
+braces x = unwords ["{", x, "}"]
+
+declStruct (ts, t) = putStrLn $ unwords [ t, "= type", braces $ commaSep ts ]
+
+exec m = do
+  st <- execStateT m $ St 0 M.empty S.empty M.empty
+  mapM_ declString $ M.toList $ strings st
+  mapM_ putStrLn $ decls st
+  mapM_ declStruct $ M.toList $ structs st
+  
 declString :: (String, Val (Ptr (Ptr Char))) -> IO ()
 declString (x, y) = do
   putStrLn $ unwords [ n, "= private unnamed_addr constant", t, escString x ++ ", align 1" ]
@@ -154,11 +199,13 @@ declString (x, y) = do
     t = tyString x
     
 main :: IO ()
-main = do
-  st <- exec $ do
-    define main'
-  mapM_ declString $ M.toList $ strings st
-  mapM_ putStrLn $ decls st
+main = exec $ do
+    -- define main'
+  define $ proc_ "main" $ do
+    p <- alloca $ int 5
+    q <- idx p $ int 3
+    i <- load q
+    ret (i :: IntT)
   -- define bar
 --   define "foo" $ \(a,b) -> do
 --     label $ Label 0
@@ -194,10 +241,14 @@ define :: (Agg a, Ret b) => Proc a b -> M ()
 define (Proc n Nothing) = error $ "unable to define ffi call:" ++ n
 define ((Proc n (Just f)) :: Proc a b) = do
   a <- instantiate
-  output0 $ "define " ++ tyRet (unused "define" :: b) ++ " @" ++ n ++ args a  
+  vs <- args a
+  output0 $ "define " ++ tyRet (unused "define" :: b) ++ " @" ++ n ++ vs
   output0 "{"
   _ <- f a
   output0 "}"
+
+tyVal :: Ty a => Val a -> String
+tyVal (_ :: Val a) = ty (unused "ty (Val a)" :: a)
 
 hcat x y = unwords [x, y]
 
@@ -288,7 +339,7 @@ sdlLoadBMP x = do
 class Ret b where
   call :: Agg a => Proc a b -> a -> M b
   ret :: b -> M b
-  tyRet :: b -> String
+  tyRet :: b -> Type
 
 declare :: (Agg a, Ret b) => String -> a -> b -> M ()
 declare n a v = modify $ \st -> st{ decls = S.insert s $ decls st }
@@ -296,14 +347,18 @@ declare n a v = modify $ \st -> st{ decls = S.insert s $ decls st }
     s = "declare " ++ tyRet v ++ " @" ++ n ++ tyargs a
 
 instance Ty a => Ret (Val a) where
-  call (Proc x _) y = assign $ \v -> prim_ "call" [ tyVal v ++ " @" ++ x ++ args y ]
+  call (Proc x _) y = do
+    vs <- args y
+    assign $ \v -> prim_ "call" [ tyVal v ++ " @" ++ x ++ vs ]
   ret x = do
     output $ "ret " ++ pp x
     return x
   tyRet = tyVal
   
 instance Ret () where
-  call (Proc x _) y = prim "call" [ "void @" ++ x ++ args y ]
+  call (Proc x _) y = do
+    vs <- args y
+    prim "call" [ "void @" ++ x ++ vs ]
   ret () = output "ret void"
   tyRet _ = "void"
   
@@ -356,7 +411,29 @@ str s = do
       modify $ \st -> st{ strings = M.insert s v tbl }
       return v
   load p
-  
+
+--  str :: String -> M CString
+
+-- data Struct2 a b
+
+-- instance (PP a, PP b) => PP (Struct2 a b)
+-- instance (Ty a, Ty b) => Ty (Struct2 a b) where
+--   ty (_ :: Struct2 a b) = do
+--     ta <- ty (unused "Struct2" :: a)
+--     tb <- ty (unused "Struct2" :: b)
+--     struct [ta, tb]
+
+struct :: [Type] -> M Type
+struct ts = do
+  tbl <- gets structs
+  case M.lookup ts tbl of
+    Just t -> return t
+    Nothing -> do
+      i <- fresh
+      let t = "%struct." ++ show i
+      modify $ \st -> st{ structs = M.insert ts t tbl }
+      return t
+
 if' :: Val Bool -> M () -> M () -> M ()
 if' x y z = do
   istrue <- freshLabel
@@ -371,8 +448,8 @@ if' x y z = do
   br done
   label done
 
-phi :: Ret b => [(b, Label)] -> M b
-phi = undefined
+-- phi :: Ret b => [(b, Label)] -> M b
+-- phi = undefined
 
 sdl_init_timer :: IntT
 sdl_init_timer = int 0x00000001
@@ -460,8 +537,8 @@ ppVal x = case x of
     LWord8 a -> ppt a
     LChar a -> ppt a
 
-ppTyVal :: UVal -> String
-ppTyVal x = case x of
+tyUVal :: UVal -> Type
+tyUVal x = case x of
   Var t _ -> t
   Lit a -> case a of
     LInt a -> ty a
@@ -470,11 +547,14 @@ ppTyVal x = case x of
     LChar a -> ty a
     LWord8 a -> ty a
     
-args :: Agg a => a -> String
-args x = parens (map ppVal $ toList $ agg x)
+args :: Agg a => a -> M String
+args x = do
+  let vs = toList $ agg x
+  -- mapM_ declareType vs
+  return $ parens (map ppVal vs)
 
 tyargs :: Agg a => a -> String
-tyargs x = parens (map ppTyVal $ toList $ agg x)
+tyargs x = parens (map tyUVal $ toList $ agg x)
 
 int :: Int -> IntT
 int = Lit
@@ -503,6 +583,7 @@ switch x y zs =
   where
     f (a,b) = commaSep [ ppt a, ppLabel b ]
 
+ppt :: Ty a => a -> String
 ppt a = hcat (ty a) $ ppu a
 
 data TyRec a = TyRec
@@ -614,18 +695,10 @@ unUVal x = case x of
   Var a b -> Var a b
   Lit a -> Lit $ unULit a
 
-toUVal :: Ty a => Val a -> Val ULit
+toUVal :: Ty a => Val a -> UVal
 toUVal x = case x of
   Var a b -> Var a b
   Lit a -> Lit $ toULit a
-
-data ULit
-  = LInt{ unLInt :: Int }
-  | LWord8{ unLWord8 :: Word8 }
-  | LBool{ unLBool :: Bool }
-  | LChar{ unLChar :: Char }
-  | LPtr Type Int
-  deriving (Show, Generic, Eq, Ord)
 
 {-
 instance Ty Lit where
