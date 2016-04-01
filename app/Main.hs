@@ -146,6 +146,12 @@ load x = assign $ \_ -> prim_ "load" [pp x]
 
 -- declareType :: UVal -> M ()
 -- declareType = undefined
+    
+args :: Agg a => a -> M String
+args x = do
+  let vs = toList $ agg x
+  -- mapM_ declareType vs
+  return $ parens (map ppVal vs)
 
 assign :: Ty a => (Val a -> String) -> M (Val a)
 assign (f :: Val a -> String) = do
@@ -546,12 +552,6 @@ tyUVal x = case x of
     LPtr t _ -> t
     LChar a -> ty a
     LWord8 a -> ty a
-    
-args :: Agg a => a -> M String
-args x = do
-  let vs = toList $ agg x
-  -- mapM_ declareType vs
-  return $ parens (map ppVal vs)
 
 tyargs :: Agg a => a -> String
 tyargs x = parens (map tyUVal $ toList $ agg x)
