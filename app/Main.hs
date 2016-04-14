@@ -1,183 +1,28 @@
 {-# OPTIONS_GHC -Wall -fno-warn-name-shadowing -fno-warn-missing-signatures #-}
--- {-# LANGUAGE IncoherentInstances #-}
--- {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveGeneric          #-}
--- {-# LANGUAGE FlexibleInstances      #-}
--- {-# LANGUAGE FunctionalDependencies #-}
--- {-# LANGUAGE MultiParamTypeClasses  #-}
--- {-# LANGUAGE RebindableSyntax       #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
--- {-# LANGUAGE FlexibleContexts #-}
-
 
 module Main where
 
--- import           Data.Bits              hiding (xor)
--- import qualified Data.Bits              as B
-import           Prelude                hiding (concat, foldr, maximum)
--- import           Data.Bits hiding (xor)
--- import           Data.Hashable          (Hashable)
--- import qualified Data.Hashable          as H
-import           Data.List (intersperse)
-import           Data.Map.Strict               (Map)
-import qualified Data.Map.Strict               as M
--- import           Data.Maybe
-import qualified Data.Set as S
-import           Data.Set               (Set)
--- import           Control.Monad.Identity
-import           Control.Monad.State
-import           Data.Word
--- import qualified Prelude                as P
--- import Data.Graph hiding (Tree, Node)
--- import           T
--- -- import           Prelude (fromIntegral, undefined, Either(..), ($), unwords, fmap, (.), (++), String, error, Bool(..), show, concat, unzip3, fst, Float, Int, fromEnum, print, Integer, Show, Num)
--- import           Prelude hiding ((==), (/=), (>), (<), (>=), (<=), (+), (-), (*), (/), (%), (^), abs, fromInteger, fromRational, pi, sqrt, negate, sum, succ, pred)
--- import           Debug.Trace
--- instance TyCmp Int Bool where cmpRec = cmpRecA
--- class TyCmp a b | a -> b where cmpRec :: CmpRec a b
--- instance Rep r => TyCmp (r Int) (r Bool) where cmpRec = cmpRecR
--- import           Control.Applicative
-import           Data.Foldable
--- import           Data.Functor
--- import           Data.Traversable
-import           GHC.Generics           (Generic)
-import Numeric
+import Control.Monad.State
 import Data.Char
+import Data.Foldable
+import Data.List (intersperse)
+import Data.Map.Strict (Map)
+import Data.Set (Set)
+import Data.Word
+import GHC.Generics (Generic)
+import Numeric
+import Prelude hiding (concat, foldr, maximum)
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 
--- data UVal'
---   = Var' String
---   | Undef
---   | CInt{ unCInt :: Int }
---   | CWord8{ unCWord8 :: Word8 }
---   | CBool{ unCBool :: Bool }
---   | CChar{ unCChar :: Char }
---   deriving (Show, Generic, Eq, Ord)
-  
--- data TVal = TVal{ typ :: Type, uval :: UVal' }
-
--- data V a = V{ unV :: TVal }
--- data T a = T{ unT :: Type }
-  
--- class Typ a where
---   typeof :: T a
-
--- undef ::
--- instance Typ Int where
---   typeof = T "i32"
-    
-type M a = StateT St IO a
+data Val a = Lit a | Var Type String deriving Show
 
 data Ptr a = Ptr{ unPtr :: Int }
   deriving (Show, Generic, Eq, Ord)
 
 type Type = String
-
-data Val a = Lit a | Var Type String deriving Show
-
-data ULit
-  = LInt{ unLInt :: Int }
-  | LWord8{ unLWord8 :: Word8 }
-  | LBool{ unLBool :: Bool }
-  | LChar{ unLChar :: Char }
-  | LPtr Type Int
-  deriving (Show, Generic, Eq, Ord)
-
-ppVar t i = t ++ show i
-
-commaSep = concat . intersperse ", "
-
-prim_ x ys = hcat x $ commaSep ys
-
-output :: String -> M ()
-output x = output0 $ indent 2 x
-
-output0 = lift . putStrLn
-
-prim :: String -> [String] -> M ()
-prim x = output . prim_ x
-
-class PP a where ppu :: a -> String
-instance PP RectT where ppu _ = undefined
-instance PP SurfaceT where ppu _ = undefined
-instance PP TextureT where ppu _ = undefined
-instance PP WindowT where ppu _ = undefined
-instance PP RendererT where ppu _ = undefined
-instance PP RWopsT where ppu _ = undefined
-instance PP Bool where
-  ppu x = case x of
-    True -> "true"
-    False -> "false"
-    
-instance PP Char where ppu = show . fromEnum
-instance PP Int where ppu = show
-instance PP Word8 where ppu = show
-
-instance Ty a => PP (Ptr a) where ppu = ppPtr . unPtr
- 
-instance Ty a => PP (Val a) where
-  ppu x = case x of
-            Var _ b -> b
-            Lit a -> ppu a
-
-pp x = hcat (tyVal x) $ ppu x
-
-store :: Ty a => Val a -> Val (Ptr a) -> M ()
-store x y = prim "store" [pp x, pp y]
-
-fresh :: M Int
-fresh = do
-  i <- gets next
-  modify $ \st -> st{ next = succ i }
-  return i
-
-parens xs = "(" ++ commaSep xs ++ ")"
-
-alloca :: Ty a => IntT -> M (P a)
-alloca n = assign $ \(v :: P a) -> prim_ "alloca" [tyVal (unused "alloca" :: Val a), pp n]
-
-idx :: Ty a => P a -> IntT -> M (P a)
-idx (x :: P a) n = assign $ \v -> prim_ "getelementptr inbounds" [pp x, pp n]
-
-fld :: (Ty a, Ty b) => P a -> IntT -> M (P b)
-fld (x :: P a) n = assign $ \v -> prim_ "getelementptr inbounds" [pp x, pp $ int 0, pp n]
-
-load :: Ty a => Val (Ptr a) -> M (Val a)
-load x = assign $ \_ -> prim_ "load" [pp x]
-
--- declareType :: UVal -> M ()
--- declareType = undefined
-    
-args :: Agg a => a -> M String
-args x = do
-  let vs = toList $ agg x
-  -- mapM_ declareType vs
-  return $ parens (map ppVal vs)
-
-assign :: Ty a => (Val a -> String) -> M (Val a)
-assign (f :: Val a -> String) = do
-  i <- fresh
-  let v :: Val a = bvar (tyVal v) i
-  -- declareType $ toUVal v
-  output $ unwords [ppu v, "=", f v]
-  return v
-
-add :: Ty a => Val a -> Val a -> M (Val a)
-add x y = assign $ \_ -> prim_ "add" [pp x, ppu y]
-  
-data Label = Label{ unLabel :: Int } deriving Show
-
--- foo = proc "foo" $ \(a,b) -> do
---   store (int 4) a
---   v <- load a
---   r <- add b v
---   store b a
---   store r a
-
--- bar = proc "bar" $ \(a, b) -> do
---   c <- alloca
---   call foo (b, a)
---   call foo (c, a)
---   inline foo (c, a)
 
 data St = St
   { next :: Int
@@ -185,80 +30,439 @@ data St = St
   , decls :: Set String
   , structs :: Map [Type] Type
   } deriving Show
-
-braces x = unwords ["{", x, "}"]
-
-declStruct (ts, t) = putStrLn $ unwords [ t, "= type", braces $ commaSep ts ]
-
-exec m = do
-  st <- execStateT m $ St 0 M.empty S.empty M.empty
-  mapM_ declString $ M.toList $ strings st
-  mapM_ putStrLn $ decls st
-  mapM_ declStruct $ M.toList $ structs st
-  
-declString :: (String, Val (Ptr (Ptr Char))) -> IO ()
-declString (x, y) = do
-  putStrLn $ unwords [ n, "= private unnamed_addr constant", t, escString x ++ ", align 1" ]
-  putStrLn $ unwords [ ppu y, "= global i8* getelementptr inbounds (" ++ t ++ "* " ++ n ++ ", i32 0, i32 0), align 4" ]
-  where
-    n = ppu y ++ ".str"
-    t = tyString x
     
-main :: IO ()
-main = exec $ do
-    -- define main'
-  define $ proc_ "main" $ do
-    p <- alloca $ int 5
-    q <- idx p $ int 3
-    i <- load q
-    ret (i :: IntT)
-  -- define bar
---   define "foo" $ \(a,b) -> do
---     label $ Label 0
---     x <- alloca
---     store (int 4) x
---     store a x
---     store a b
---     v <- load x
---     switch v (Label 0) [(0, Label 1), (1, Label 2), (14, Label 3)]
---     switch v (Label 0) [(0, Label 1), (1, Label 2), (14, Label 3)]
---     br $ Label 0
---     call "foo" (x, v)
---     ret
+type M a = StateT St IO a
+
+-- class PP a where ppu :: a -> String
+
+data TyRec a = TyRec
+  { _ty :: Val a -> M Type
+  , _toULit :: a -> M ULit
+  , _unULit :: ULit -> a
+  }
+
+ty :: Ty a => Val a -> M Type
+ty = _ty tyRec
+
+toULit :: Ty a => a -> M ULit
+toULit = _toULit tyRec
+
+unULit :: Ty a => ULit -> a
+unULit = _unULit tyRec
+
+type P a = Val (Ptr a)
+
+data ULit
+  = LInt{ unLInt :: Int }
+  | LWord8{ unLWord8 :: Word8 }
+  | LBool{ unLBool :: Bool }
+  | LPtr Int Type
+  deriving (Show, Generic, Eq, Ord)
+
+class Ty a where tyRec :: TyRec a
+
+tyRecInt :: (Int -> a) -> (a -> Int) -> TyRec a
+tyRecInt f g = tyRecPrim "i32" (LInt . g) (f . unLInt)
+
+tyRecWord8 :: (Word8 -> a) -> (a -> Word8) -> TyRec a
+tyRecWord8 f g = tyRecPrim "i8" (LWord8 . g) (f . unLWord8)
+
+tyRecPrim t f g = TyRec
+  { _ty = return . const t
+  , _toULit = return . f
+  , _unULit = g
+  }
+
+instance Ty Int where tyRec = tyRecInt id id
+instance Ty Word8 where tyRec = tyRecWord8 id id
+instance Ty Bool where tyRec = tyRecPrim "i1" LBool unLBool
+instance Ty Char where tyRec = tyRecWord8 (toEnum . fromIntegral) (fromIntegral . fromEnum)
+
+concatM :: [M String] -> M String
+concatM xs = concat <$> sequence xs
+
+unwordsM :: [M String] -> M String
+unwordsM xs = unwords <$> sequence xs
+    
+unused s = error $ "unused:" ++ s
+
+instance Ty a => Ty (Ptr a) where
+  tyRec = TyRec
+    { _ty = const $ concatM [ ty (unused "ty (Ptr a)" :: Val a), return "*" ]
+    , _toULit = \x@(Ptr a) -> LPtr a <$> ty (Lit x)
+    , _unULit = \(LPtr a _) -> Ptr a
+    }
+
+callM v x y = [ unwordsM [tyRet v, concatM [procName x, args y ] ] ]
+retM x = outputM2 $ unwordsM [return "ret", x]
+
+instance Ty a => Ret (Val a) where
+  call (Proc x _) y = assign $ \v -> prim_ "call" $ callM v x y
+  ret x = retM (pp x) >> return x
+  tyRet = ty
+  
+instance Ret () where
+  call (Proc x _) y = prim "call" $ callM () x y
+  ret () = retM (return "void")
+  tyRet _ = return "void"
+    
+class Ret b where
+  call :: Agg a => Proc a b -> a -> M b
+  ret :: b -> M b
+  tyRet :: b -> M Type
+
+class Agg a where
+  unAgg :: Tree UVal -> a
+  agg :: a -> M (Tree UVal)
+  instantiate :: M a
+
+fresh :: M Int
+fresh = do
+  i <- gets next
+  modify $ \st -> st{ next = succ i }
+  return i
+
+store :: Ty a => Val a -> P a -> M ()
+store x y = prim "store" [pp x, pp y]
+
+prim :: String -> [M String] -> M ()
+prim x = outputM2 . prim_ x
+
+indent :: Int -> M String -> M String
+indent n m = concatM [return $ replicate n ' ', m]
+
+outputM :: M String -> M ()
+outputM x = x >>= output
+
+outputM2 :: M String -> M ()
+outputM2 x = indent 2 x >>= output
+
+output :: String -> M ()
+output = lift . putStrLn
+
+commaSep :: [M String] -> M String
+commaSep = concatM . intersperse (return ", ")
+
+prim_ :: String -> [M String] -> M String
+prim_ x ys = unwordsM [return x, commaSep ys]
+
+pp :: Ty a => Val a -> M String
+pp x = toUVal x >>= ppUValT
+
+ppu :: Ty a => Val a -> M String
+ppu x = toUVal x >>= ppUVal
+
+ppULit :: ULit -> M String
+ppULit x = return $ case x of
+  LInt a -> show a
+  LWord8 a -> show a
+  LBool a -> case a of
+    True -> "true"
+    False -> "false"
+  LPtr a _ -> if a == 0 then "null" else show a
+
+ppUValT :: UVal -> M String
+ppUValT x = unwordsM [tyUVal x, ppUVal x]
+                      
+ppUVal :: UVal -> M String
+ppUVal x = case x of
+  Lit a -> ppULit a
+  Var _ s -> return s
+  
+type UVal = Val ULit
+
+toUVal :: Ty a => Val a -> M UVal
+toUVal x = case x of
+  Var a b -> return $ Var a b
+  Lit a -> Lit <$> toULit a
+
+br :: Label -> M ()
+br x = prim "br" [ppLabel x]
+
+data Label = Label{ unLabel :: Int } deriving Show
+
+ppULabel = (++) "L" . show . unLabel
+
+ppLabel x = return $ unwords ["label", "%" ++ ppULabel x]
+
+alloca :: Ty a => IntT -> M (P a)
+alloca n = assign $ \(_ :: P a) -> prim_ "alloca" [ty (unused "alloca" :: Val a), pp n]
+
+idx :: Ty a => P a -> IntT -> M (P a)
+idx (x :: P a) n = assign $ \_ -> prim_ "getelementptr inbounds" [pp x, pp n]
+
+fld :: (Ty a, Ty b) => P a -> IntT -> M (P b)
+fld (x :: P a) n = assign $ \_ -> prim_ "getelementptr inbounds" [pp x, pp $ int 0, pp n]
+
+load :: Ty a => P a -> M (Val a)
+load x = assign $ \_ -> prim_ "load" [pp x]
+
+add :: Ty a => Val a -> Val a -> M (Val a)
+add x y = assign $ \_ -> prim_ "add" [pp x, ppu y]
+
+eq :: Ty a => Val a -> Val a -> M (Val Bool)
+eq x y = assign $ \_ -> prim_ "icmp eq" [pp x, ppu y]
+
+assign :: Ty a => (Val a -> M String) -> M (Val a)
+assign (f :: Val a -> M String) = do
+  v <- bvar <$> ty (unused "assign" :: Val a) <*> fresh
+  outputM2 $ unwordsM [ppu v, return "=", f v]
+  return v
+
+bvar t i = Var t $ "%v" ++ show i
+
+type IntT = Val Int
+type Word8T = Val Word8
+
+int :: Int -> IntT
+int = Lit
+
+w8 :: Word8 -> Word8T
+w8 = Lit
+
+unlinesM :: [M String] -> M String
+unlinesM xs = (init . unlines) <$> sequence xs
+  
+brackets :: [M String] -> M String
+brackets xs = unlinesM (return "[" : map (indent 4) xs ++ [indent 4 $ return "]"])
+
+switch :: Ty a => Val a -> Label -> [(a, Label)] -> M ()
+switch x y zs =
+  prim "switch" [ pp x, unwordsM [ppLabel y, brackets $ map f zs ] ]
+  where
+    f (a,b) = commaSep [ pp $ Lit a, ppLabel b ]
+
+braces :: M String -> M String
+braces x = unwordsM [return "{", x, return "}"]
+
+declStruct :: ([Type], Type) -> M ()
+declStruct (ts, t) =
+  unwordsM [ return t, return "= type", braces $ commaSep $ map return ts ] >>= output
+
+declString :: (String, Val (Ptr (Ptr Char))) -> M ()
+declString (x, y) = do
+  n <- ppu y
+  let s = n ++ ".str"
+  output $ unwords [ s, "= private unnamed_addr constant", t, escString x ++ ", align 1" ]
+  output $ unwords [ n
+                   , "= global i8* getelementptr inbounds (" ++ t ++ "*"
+                   , s ++ ", i32 0, i32 0), align 4" ]
+  where
+    t = "[" ++ show (length x + 1) ++ " x i8]"
+
+escString :: String -> String
+escString s = "c\"" ++ concatMap escChar (s ++ "\0") ++ "\""
+
+escChar :: Char -> [Char]
+escChar c
+  | c == '"' || c < ' ' || c > '~' = "\\" ++ map toUpper a'
+  | otherwise = [c]
+  where
+    a = showHex (fromEnum c) ""
+    a' = case a of
+      [_] -> "0" ++ a
+      _ -> a
+
+eval :: M () -> IO ()
+eval m = do
+  flip evalStateT (St 0 M.empty S.empty M.empty) $ do
+    () <- m
+    st <- get
+    mapM_ declString $ M.toList $ strings st
+    mapM_ output $ decls st
+    mapM_ declStruct $ M.toList $ structs st
+
+type Name = String
+
+data Proc a b = Proc Name (Maybe (a -> M b))
+
+proc :: (Agg a, Ret b) => Name -> (a -> M b) -> Proc a b
+proc x = Proc x . Just
+
+proc_ :: Ret b => Name -> M b -> Proc () b
+proc_ x m = proc x (\() -> m)
 
 inline :: Agg a => Proc a b -> a -> M b
 inline (Proc n mf) x = maybe (error $ "unable to inline ffi call:" ++ n) (\f -> f x) mf
-  
-data Proc a b = Proc String (Maybe (a -> M b))
 
-proc :: (Agg a, Ret b) => String -> (a -> M b) -> Proc a b
-proc x = Proc x . Just
+parens :: [M String] -> M String
+parens xs = concatM [return "(", commaSep xs, return ")"]
+    
+args :: Agg a => a -> M String
+args x = ((map ppUValT . toList) <$> agg x) >>= parens
 
-foo :: Proc () IntT
-foo = proc_ "main" $ do
-  s <- str "hello, world."
-  puts s
-  ret $ int 0
+tyargs :: Agg a => a -> M String
+tyargs x = ((map tyUVal . toList) <$> agg x) >>= parens
 
-proc_ :: Ret b => String -> M b -> Proc () b
-proc_ x m = proc x (\() -> m)
-  
+procName n = return ("@" ++ n)
+
 define :: (Agg a, Ret b) => Proc a b -> M ()
 define (Proc n Nothing) = error $ "unable to define ffi call:" ++ n
 define ((Proc n (Just f)) :: Proc a b) = do
   a <- instantiate
-  vs <- args a
-  output0 $ "define " ++ tyRet (unused "define" :: b) ++ " @" ++ n ++ vs
-  output0 "{"
+  outputM $ unwordsM [ return "define", tyRet (unused "define" :: b), procName n, args a ]
+  output "{"
   _ <- f a
-  output0 "}"
+  output "}"
+ 
+unUVal :: Ty a => UVal -> Val a
+unUVal x = case x of
+  Var a b -> Var a b
+  Lit a -> Lit $ unULit a
 
-tyVal :: Ty a => Val a -> String
-tyVal (_ :: Val a) = ty (unused "ty (Val a)" :: a)
+instance Ty a => Agg (Val a) where
+  unAgg (Leaf a) = unUVal a
+  unAgg _ = unused "unAgg"
+  agg x = Leaf <$> toUVal x
+  instantiate = f $ unused "instantiate"
+    where
+      f :: Val a -> M (Val a)
+      f a = bvar <$> ty a <*> fresh
 
-hcat x y = unwords [x, y]
+instance Agg () where
+ unAgg (Node []) = ()
+ unAgg _ = unused "unAgg"
+ agg () = nodeM []
+ instantiate = return ()
 
-type P a = Val (Ptr a)
+nodeM xs = Node <$> sequence xs
+
+instance (Agg a, Agg b) => Agg (a, b) where
+  unAgg (Node [a,b]) = (unAgg a, unAgg b)
+  unAgg _ = unused "unAgg"
+  agg (a, b) = nodeM [agg a, agg b]
+  instantiate = (,) <$> instantiate <*> instantiate
+ 
+instance (Agg a, Agg b, Agg c) => Agg (a, b, c) where
+  unAgg (Node [a,b,c]) = (unAgg a, unAgg b, unAgg c)
+  unAgg _ = unused "unAgg"
+  agg (a, b, c) = nodeM [agg a, agg b, agg c]
+  instantiate = (,,) <$> instantiate <*> instantiate <*> instantiate
+ 
+instance (Agg a, Agg b, Agg c, Agg d) => Agg (a, b, c, d) where
+  unAgg (Node [a,b,c,d]) = (unAgg a, unAgg b, unAgg c, unAgg d)
+  unAgg _ = unused "unAgg"
+  agg (a, b, c, d) = nodeM [agg a, agg b, agg c, agg d]
+  instantiate = (,,,) <$> instantiate <*> instantiate <*> instantiate <*> instantiate
+
+data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq, Generic)
+
+instance Foldable Tree where
+  foldr f b x = case x of
+    Leaf a -> f a b
+    Node ns -> foldr (flip (foldr f)) b ns
+
+instance Traversable Tree where
+  traverse f x = case x of
+    Leaf a -> Leaf <$> f a
+    Node ns -> Node <$> traverse (traverse f) ns
+
+instance Functor Tree where
+  fmap f x = case x of
+    Leaf a -> Leaf $ f a
+    Node ns -> Node $ fmap (fmap f) ns
+
+
+declare :: (Agg a, Ret b) => Name -> a -> b -> M ()
+declare n a v = do
+  t <- tyRet v
+  ts <- tyargs a
+  let s = "declare " ++ t ++ " @" ++ n ++ ts
+  modify $ \st -> st{ decls = S.insert s $ decls st }
+  
+ffi :: (Agg a, Ret b) => Name -> a -> M b
+ffi x y = do
+  b <- call (Proc x Nothing) y
+  declare x y b
+  return b
+
+type CString = P Char
+
+puts :: CString -> M ()
+puts = ffi "puts"
+
+tyUVal :: UVal -> M Type
+tyUVal x = case x of
+  Var t _ -> return t
+  Lit a -> case a of
+    LInt a -> ty $ Lit a
+    LBool a -> ty $ Lit a
+    LPtr _ t -> return t
+    LWord8 a -> ty $ Lit a
+
+  
+freshLabel :: M Label
+freshLabel = Label <$> fresh
+  
+label :: Label -> M ()
+label x = output (ppULabel x ++ ":")
+
+if' :: Val Bool -> M () -> M () -> M ()
+if' x y z = do
+  istrue <- freshLabel
+  isfalse <- freshLabel
+  done <- freshLabel
+  switch x istrue [(False, isfalse)]
+  label istrue
+  y
+  br done
+  label isfalse
+  z
+  br done
+  label done
+  
+nullptr :: Ty a => Val (Ptr a)
+nullptr = Lit $ Ptr 0
+
+withPtr :: Ty a => M (P a) -> M () -> (P a -> M ()) -> M ()
+withPtr m n f = do
+  p <- m
+  r <- p `eq` nullptr
+  if' r n (f p)
+
+sdl_init_timer :: IntT
+sdl_init_timer = int 0x00000001
+sdl_init_audio :: IntT
+sdl_init_audio = int 0x00000010
+sdl_init_video :: IntT
+sdl_init_video = int 0x00000020
+sdl_init_events :: IntT
+sdl_init_events = int 0x00004000
+
+sdlInit :: IntT -> M ()
+sdlInit = ffi "SDL_Init"
+
+sdlQuit :: M ()
+sdlQuit = ffi "SDL_Quit" ()
+
+sdlRenderPresent :: Renderer -> M ()
+sdlRenderPresent = ffi "SDL_RenderPresent"
+sdlRenderCopy :: (Renderer, Texture, P RectT, P RectT) -> M ()
+sdlRenderCopy = ffi "SDL_RenderCopy"
+sdlRenderClear :: Renderer -> M ()
+sdlRenderClear = ffi "SDL_RenderClear"
+sdlSetRenderDrawColor :: (Renderer, (Word8T, Word8T, Word8T, Word8T)) -> M ()
+sdlSetRenderDrawColor = ffi "SDL_SetRenderDrawColor"
+
+data RendererT = RendererT{ unRendererT :: Int }
+data RWopsT = RWopsT{ unRWopsT :: Int }
+data TextureT = TextureT{ unTextureT :: Int }
+data SurfaceT = SurfaceT{ unSurfaceT :: Int }
+data RectT = RectT{ unRectT :: Int }
+data WindowT = WindowT{ unWindowT :: Int }
+
+type Window = P WindowT
+type Renderer = P RendererT
+type RWops = P RWopsT
+type Texture = P TextureT
+type Surface = P SurfaceT
+
+instance Ty WindowT where tyRec = tyRecInt WindowT unWindowT
+instance Ty RendererT where tyRec = tyRecInt RendererT unRendererT
+instance Ty RWopsT where tyRec = tyRecInt RWopsT unRWopsT
+instance Ty TextureT where tyRec = tyRecInt TextureT unTextureT
+instance Ty SurfaceT where tyRec = tyRecInt SurfaceT unSurfaceT
+instance Ty RectT where tyRec = tyRecInt RectT unRectT
 
 withResource :: (Agg a, Ty b) =>
   (a -> M (P b)) -> (P b -> M ()) -> String -> a -> (P b -> M ()) -> M ()
@@ -267,37 +471,7 @@ withResource create destroy s x use =
     use p
     destroy p
 
-type CString = P Char
-
 type Rect = ((IntT, IntT), (IntT, IntT))
-
-data WindowT = WindowT{ unWindowT :: Int }
-
-instance Ty WindowT where tyRec = tyRecInt WindowT unWindowT
-
-data RendererT = RendererT{ unRendererT :: Int }
-instance Ty RendererT where tyRec = tyRecInt RendererT unRendererT
-
-data RWopsT = RWopsT{ unRWopsT :: Int }
-instance Ty RWopsT where tyRec = tyRecInt RWopsT unRWopsT
-
-data TextureT = TextureT{ unTextureT :: Int }
-instance Ty TextureT where tyRec = tyRecInt TextureT unTextureT
-
-data SurfaceT = SurfaceT{ unSurfaceT :: Int }
-instance Ty SurfaceT where tyRec = tyRecInt SurfaceT unSurfaceT
-
-data RectT = RectT{ unRectT :: Int }
-instance Ty RectT where tyRec = tyRecInt RectT unRectT
-
-type IntT = Val Int
-type Window = P WindowT
-type Renderer = P RendererT
-type RWops = P RWopsT
-type Texture = P TextureT
-type Surface = P SurfaceT
-
-type Word8T = Val Word8
 
 withWindow :: (CString, Rect, IntT) -> (Window -> M ()) -> M ()
 withWindow = withResource sdlCreateWindow sdlDestroyWindow "window"
@@ -342,41 +516,6 @@ sdlLoadBMP x = do
   p <- sdlRWFromFile (x, s)
   sdlLoadBMP_RW (p, int 1)
 
-class Ret b where
-  call :: Agg a => Proc a b -> a -> M b
-  ret :: b -> M b
-  tyRet :: b -> Type
-
-declare :: (Agg a, Ret b) => String -> a -> b -> M ()
-declare n a v = modify $ \st -> st{ decls = S.insert s $ decls st }
-  where
-    s = "declare " ++ tyRet v ++ " @" ++ n ++ tyargs a
-
-instance Ty a => Ret (Val a) where
-  call (Proc x _) y = do
-    vs <- args y
-    assign $ \v -> prim_ "call" [ tyVal v ++ " @" ++ x ++ vs ]
-  ret x = do
-    output $ "ret " ++ pp x
-    return x
-  tyRet = tyVal
-  
-instance Ret () where
-  call (Proc x _) y = do
-    vs <- args y
-    prim "call" [ "void @" ++ x ++ vs ]
-  ret () = output "ret void"
-  tyRet _ = "void"
-  
-ffi :: (Agg a, Ret b) => String -> a -> M b
-ffi x y = do
-  b <- call (Proc x Nothing) y
-  declare x y b
-  return b
-
-puts :: CString -> M ()
-puts = ffi "puts"
-
 err :: String -> M ()
 err x = str ("error:" ++ x) >>= puts
 
@@ -385,26 +524,6 @@ rerr x = err $ "unable to create " ++ x
 
 sdl_renderer_accelerated :: IntT
 sdl_renderer_accelerated = int 0x00000002
-
-tyString s = ("[" ++ show (length s + 1) ++ " x i8]")
-
-escString :: String -> String
-escString s = "c\"" ++ concatMap escChar (s ++ "\0") ++ "\""
-
-ppPtr i = if i == 0 then "null" else show i
-
-escChar :: Char -> [Char]
-escChar c
-  | c == '"' || c < ' ' || c > '~' = "\\" ++ map toUpper a'
-  | otherwise = [c]
-  where
-    a = showHex (fromEnum c) ""
-    a' = case a of
-      [_] -> "0" ++ a
-      _ -> a
-
-fvar t i = Var t $ "@g" ++ show i
-bvar t i = Var t $ "%v" ++ show i
 
 str :: String -> M CString
 str s = do
@@ -418,77 +537,7 @@ str s = do
       return v
   load p
 
---  str :: String -> M CString
-
--- data Struct2 a b
-
--- instance (PP a, PP b) => PP (Struct2 a b)
--- instance (Ty a, Ty b) => Ty (Struct2 a b) where
---   ty (_ :: Struct2 a b) = do
---     ta <- ty (unused "Struct2" :: a)
---     tb <- ty (unused "Struct2" :: b)
---     struct [ta, tb]
-
-struct :: [Type] -> M Type
-struct ts = do
-  tbl <- gets structs
-  case M.lookup ts tbl of
-    Just t -> return t
-    Nothing -> do
-      i <- fresh
-      let t = "%struct." ++ show i
-      modify $ \st -> st{ structs = M.insert ts t tbl }
-      return t
-
-if' :: Val Bool -> M () -> M () -> M ()
-if' x y z = do
-  istrue <- freshLabel
-  isfalse <- freshLabel
-  done <- freshLabel
-  switch x istrue [(False, isfalse)]
-  label istrue
-  y
-  br done
-  label isfalse
-  z
-  br done
-  label done
-
--- phi :: Ret b => [(b, Label)] -> M b
--- phi = undefined
-
-sdl_init_timer :: IntT
-sdl_init_timer = int 0x00000001
-sdl_init_audio :: IntT
-sdl_init_audio = int 0x00000010
-sdl_init_video :: IntT
-sdl_init_video = int 0x00000020
-sdl_init_events :: IntT
-sdl_init_events = int 0x00004000
-
-eq :: Ty a => Val a -> Val a -> M (Val Bool)
-eq x y = assign $ \_ -> prim_ "icmp eq" [pp x, ppu y]
-
-instance Agg () where
- unAgg (Node []) = ()
- unAgg _ = unused "unAgg"
- agg () = Node []
- instantiate = return ()
-
-sdlInit :: IntT -> M ()
-sdlInit = ffi "SDL_Init"
-
-sdlQuit :: M ()
-sdlQuit = ffi "SDL_Quit" ()
-
-sdlRenderPresent :: Renderer -> M ()
-sdlRenderPresent = ffi "SDL_RenderPresent"
-sdlRenderCopy :: (Renderer, Texture, P RectT, P RectT) -> M ()
-sdlRenderCopy = ffi "SDL_RenderCopy"
-sdlRenderClear :: Renderer -> M ()
-sdlRenderClear = ffi "SDL_RenderClear"
-sdlSetRenderDrawColor :: (Renderer, (Word8T, Word8T, Word8T, Word8T)) -> M ()
-sdlSetRenderDrawColor = ffi "SDL_SetRenderDrawColor"
+fvar t i = Var t $ "@g" ++ show i
 
 withBMPTexture :: (Renderer, CString) -> (Texture -> M ()) -> M ()
 withBMPTexture (rndr, n) f = do
@@ -514,7 +563,7 @@ main' = proc_ "main" $ do
   withSDL sdl_init_video $ do
     s <- str "Hello World"
     withWindow (s, ((int 100, int 100), (int 640, int 480)), int 0) $ \win ->
-      withWindowSurface win $ \dest ->
+      withWindowSurface win $ \_ ->
       withRenderer (win, int (-1), sdl_renderer_accelerated) $ \rndr -> do
         sdlSetRenderDrawColor (rndr, (w8 0xff, w8 0xff, w8 0xff, w8 0xff))
         s <- str "ship.bmp"
@@ -524,254 +573,74 @@ main' = proc_ "main" $ do
           sdlRenderPresent rndr
   ret $ int 0
   
-nullptr :: Ty a => Val (Ptr a)
-nullptr = Lit $ Ptr 0
-
-withPtr :: Ty a => M (Val (Ptr a)) -> M () -> (Val (Ptr a) -> M ()) -> M ()
-withPtr m n f = do
-  p <- m
-  r <- p `eq` nullptr
-  if' r n (f p)
-  
-ppVal :: UVal -> String
-ppVal x = case x of
-  Var t a -> hcat t a
-  Lit a -> case a of
-    LInt a -> ppt a
-    LBool a -> ppt a
-    LPtr t a -> hcat t $ ppPtr a
-    LWord8 a -> ppt a
-    LChar a -> ppt a
-
-tyUVal :: UVal -> Type
-tyUVal x = case x of
-  Var t _ -> t
-  Lit a -> case a of
-    LInt a -> ty a
-    LBool a -> ty a
-    LPtr t _ -> t
-    LChar a -> ty a
-    LWord8 a -> ty a
-
-tyargs :: Agg a => a -> String
-tyargs x = parens (map tyUVal $ toList $ agg x)
-
-int :: Int -> IntT
-int = Lit
-
-w8 :: Word8 -> Word8T
-w8 = Lit
-
-indent n = (++) (replicate n ' ')
-brackets xs = "[\n" ++ unlines (map (indent 4) xs) ++ indent 4 "]"
-
-br :: Label -> M ()
-br x = prim "br" [ppLabel x]
-  
-ppULabel = (++) "L" . show . unLabel
-ppLabel x = hcat "label" $ "%" ++ ppULabel x
-
-freshLabel :: M Label
-freshLabel = Label <$> fresh
-  
-label :: Label -> M ()
-label x = output0 (ppULabel x ++ ":")
-  
-switch :: Ty a => Val a -> Label -> [(a, Label)] -> M ()
-switch x y zs =
-  prim "switch" [ pp x, hcat (ppLabel y) $ brackets $ map f zs ]
-  where
-    f (a,b) = commaSep [ ppt a, ppLabel b ]
-
-ppt :: Ty a => a -> String
-ppt a = hcat (ty a) $ ppu a
-
-data TyRec a = TyRec
-  { _ty :: a -> String
-  , _toULit :: a -> ULit
-  , _unULit :: ULit -> a
-  }
-
-class PP a => Ty a where
-  ty :: a -> String
-  toULit :: a -> ULit
-  unULit :: ULit -> a
-  tyRec :: TyRec a
-  ty = _ty tyRec
-  toULit = _toULit tyRec
-  unULit = _unULit tyRec
-  tyRec = TyRec
-    { _ty = ty
-    , _toULit = toULit
-    , _unULit = unULit
-    }
-    
-tyRecInt :: (Int -> a) -> (a -> Int) -> TyRec a
-tyRecInt f g = TyRec
-  { _ty = const "i32"
-  , _toULit = LInt . g
-  , _unULit = f . unLInt
-  }
-
-instance Ty Int where tyRec = tyRecInt id id
-
-instance Ty Word8 where
-  ty _ = "i8"
-  toULit = LWord8
-  unULit = unLWord8
-  
-instance Ty Bool where
-  ty _ = "i1"
-  toULit = LBool
-  unULit = unLBool
-  
-instance Ty Char where
-  ty _ = "i8"
-  toULit = LChar
-  unULit = unLChar
-  
-instance Ty a => Ty (Ptr a) where
-  ty (_ :: Ptr a) = ty (unused "ppPtr" :: a) ++ "*"
-  toULit x@(Ptr a) = LPtr (ty x) a
-  unULit (LPtr _ a) = Ptr a
-  unULit _ = unused "unULit"
-
-unused s = error $ "unused:" ++ s
-
-data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq, Generic)
-
-instance Foldable Tree where
-  foldr f b x = case x of
-    Leaf a -> f a b
-    Node ns -> foldr (flip (foldr f)) b ns
-
-instance Traversable Tree where
-  traverse f x = case x of
-    Leaf a -> Leaf <$> f a
-    Node ns -> Node <$> traverse (traverse f) ns
-
-instance Functor Tree where
-  fmap f x = case x of
-    Leaf a -> Leaf $ f a
-    Node ns -> Node $ fmap (fmap f) ns
-
-type UVal = Val ULit
-
-class Agg a where
-  unAgg :: Tree UVal -> a
-  unAgg _ = unused "unAgg"
-  agg :: a -> Tree UVal
-  instantiate :: M a
-  
-instance Ty a => Agg (Val a) where
-  unAgg (Leaf a) = unUVal a
-  unAgg _ = unused "unAgg"
-  agg = Leaf . toUVal
-  instantiate = f $ unused "instantiate"
-    where
-      f :: a -> M (Val a)
-      f a = bvar (ty a) <$> fresh
-    
-instance (Agg a, Agg b) => Agg (a, b) where
-  unAgg (Node [a,b]) = (unAgg a, unAgg b)
-  unAgg _ = unused "unAgg"
-  agg (a, b) = Node [agg a, agg b]
-  instantiate = (,) <$> instantiate <*> instantiate
- 
-instance (Agg a, Agg b, Agg c) => Agg (a, b, c) where
-  unAgg (Node [a,b,c]) = (unAgg a, unAgg b, unAgg c)
-  unAgg _ = unused "unAgg"
-  agg (a, b, c) = Node [agg a, agg b, agg c]
-  instantiate = (,,) <$> instantiate <*> instantiate <*> instantiate
- 
-instance (Agg a, Agg b, Agg c, Agg d) => Agg (a, b, c, d) where
-  unAgg (Node [a,b,c,d]) = (unAgg a, unAgg b, unAgg c, unAgg d)
-  unAgg _ = unused "unAgg"
-  agg (a, b, c, d) = Node [agg a, agg b, agg c, agg d]
-  instantiate = (,,,) <$> instantiate <*> instantiate <*> instantiate <*> instantiate
- 
-unUVal :: Ty a => UVal -> Val a
-unUVal x = case x of
-  Var a b -> Var a b
-  Lit a -> Lit $ unULit a
-
-toUVal :: Ty a => Val a -> UVal
-toUVal x = case x of
-  Var a b -> Var a b
-  Lit a -> Lit $ toULit a
-
-{-
-instance Ty Lit where
-  ty x = "wtf"
-  -- case x of
-  --   LInt a -> ty a
-  --   LBool a -> ty a
-    
-instance PP Lit where
-  ppu x = case x of
-    LInt a -> ppu a
-    LBool a -> ppu a
--}
+main :: IO ()
+main = eval $ do
+  define main'
+  -- define $ proc_ "main" $ do
+  --   p <- alloca $ int 5
+  --   q <- idx p $ int 3
+  --   i <- load q
+  --   ret (i :: IntT)
+  -- define bar
+--   define "foo" $ \(a,b) -> do
+--     label $ Label 0
+--     x <- alloca
+--     store (int 4) x
+--     store a x
+--     store a b
+--     v <- load x
+--     switch v (Label 0) [(0, Label 1), (1, Label 2), (14, Label 3)]
+--     switch v (Label 0) [(0, Label 1), (1, Label 2), (14, Label 3)]
+--     br $ Label 0
+--     call "foo" (x, v)
+--     ret
 
 {-
 
-label :: Label -> M ()
-label = undefined
+ppVar t i = t ++ show i
 
-ret :: M ()
-ret = undefined
+-- declareType :: UVal -> M ()
+-- declareType = undefined
+  
+-- foo = proc "foo" $ \(a,b) -> do
+--   store (int 4) a
+--   v <- load a
+--   r <- add b v
+--   store b a
+--   store r a
 
-goto :: Label -> M ()
-goto = undefined
+-- bar = proc "bar" $ \(a, b) -> do
+--   c <- alloca
+--   call foo (b, a)
+--   call foo (c, a)
+--   inline foo (c, a)
 
-switch :: TyInt a => Val a -> Label -> [Label] -> M ()
-switch = undefined
+foo :: Proc () IntT
+foo = proc_ "main" $ do
+  s <- str "hello, world."
+  puts s
+  ret $ int 0
 
-proc :: String -> [Val U] -> M ()
-proc = undefined
-     
-call :: String -> [Val U] -> M ()
-call = undefined
+-- data Struct2 a b
 
--- TyArith Int, Float, or Vector
-add :: TyArith a => Val a -> Val a -> M (Val a)
-add = undefined
-sub :: TyArith a => Val a -> Val a -> M (Val a)
-sub = undefined
-mul :: TyArith a => Val a -> Val a -> M (Val a)
-mul = undefined
-div :: TyArith a => Val a -> Val a -> M (Val a)
-div = undefined
-rem :: TyArith a => Val a -> Val a -> M (Val a)
-rem = undefined
+-- instance (PP a, PP b) => PP (Struct2 a b)
+-- instance (Ty a, Ty b) => Ty (Struct2 a b) where
+--   ty (_ :: Struct2 a b) = do
+--     ta <- ty (unused "Struct2" :: a)
+--     tb <- ty (unused "Struct2" :: b)
+--     struct [ta, tb]
 
--- TyBits Int or Vector
-shl :: TyBits a => Val a -> Val a -> M (Val a)
-shl = undefined
-lshr :: TyBits a => Val a -> Val a -> M (Val a)
-lshr = undefined
-ashr :: TyBits a => Val a -> Val a -> M (Val a)
-ashr = undefined
-and :: TyBits a => Val a -> Val a -> M (Val a)
-and = undefined
-or :: TyBits a => Val a -> Val a -> M (Val a)
-or = undefined
-xor :: TyBits a => Val a -> Val a -> M (Val a)
-xor = undefined
+struct :: [Type] -> M Type
+struct ts = do
+  tbl <- gets structs
+  case M.lookup ts tbl of
+    Just t -> return t
+    Nothing -> do
+      i <- fresh
+      let t = "%struct." ++ show i
+      modify $ \st -> st{ structs = M.insert ts t tbl }
+      return t
 
-extractelement :: (Ty a, TyInt a) => Val (Vector n a) -> Val n b -> Val a
-extractelement = undefined
-
-insertelement :: Val (Vector n a) -> Val a -> Val n b -> Val (Vector n a)
-insertelement = undefined
-
-shufflevector :: Val (Vector n a) -> Val (Vector n a) -> Val (Vector m Int) -> Val (Vector m a)
-shufflevector = undefined
-
-gt :: Val a -> Val a -> M (Val Bool)
-gt = undefined
-
-class TyInt a
 -}
 
 {-
@@ -1081,8 +950,6 @@ binop f ss x y = case (aexp x, aexp y) of
     v = Op (unwords ss) [uaexp x, uaexp y]
     k = hash v
 
-bvar :: Ty a => Word -> E a
-bvar = E 0 M.empty . BVar
 
 lit :: Ty a => a -> E a
 lit = E 0 M.empty . Lit
@@ -1132,13 +999,6 @@ instance Ty Int where
   ty _ = "i32"
   toULit = LInt
   fromULit (LInt a) = a
-
-data ULit
-  = LInt Int
-  | LWord Word
-  | LBool Bool
-  deriving (Show, Generic, Eq, Ord)
-instance Hashable ULit
 
 data AExp a = Lit a | BVar Word deriving (Show, Generic, Eq, Ord)
 instance Hashable a => Hashable (AExp a)
