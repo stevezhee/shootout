@@ -4,6 +4,221 @@
 
 module Main where
 
+-- import Data.List
+import Data.Maybe
+-- import Data.Char
+
+data FFI = FFI
+  { ffi_pre :: [String]
+  , ffi_procs :: [String]
+  , ffi_fields :: [(String, String, [String])]
+  , ffi_values :: [String]
+  }
+
+main = putStrLn $ ffi_genc sdl_ffi
+
+ffi_field_genc :: (String, String, [String]) -> String
+ffi_field_genc (a, b, cs) = unlines $
+    [ a ++ " " ++ n ++ ";" ] ++
+    [ "auto _fld_" ++ b ++ "_" ++ c ++ " = &" ++ n ++ "." ++ c ++ ";" | c <- cs ]
+  where
+    n = "_rec_" ++ a ++ "_rec_"
+  
+ffi_genc x = unlines $
+  ffi_pre x ++
+  map ffi_field_genc (ffi_fields x) ++
+  [ "auto _fun_" ++ i ++ " = " ++ i ++ ";" | i <- ffi_procs x ] ++
+  [ "int _val_" ++ i ++ " = " ++ i ++ ";" | i <- ffi_values x ]
+  
+sdl_ffi = FFI
+  { ffi_pre =
+    [ "#include <stdio.h>"
+    , "#include <SDL2/SDL.h>"
+    ]
+  , ffi_procs =
+    [ "SDL_Init"
+    , "SDL_CreateWindow"
+    , "SDL_DestroyTexture"
+    , "SDL_DestroyRenderer"
+    , "SDL_DestroyWindow"
+    , "SDL_Quit"
+    , "SDL_GetWindowSurface"
+    , "SDL_GetError"
+    , "SDL_CreateRenderer"
+    , "SDL_SetRenderDrawColor"
+    , "SDL_LoadBMP_RW"
+    , "SDL_ConvertSurface"
+    , "SDL_CreateTextureFromSurface"
+    , "SDL_FreeSurface"
+    , "SDL_PollEvent"
+    , "SDL_RenderClear"
+    , "SDL_RenderCopy"
+    , "SDL_RenderPresent"
+    ]
+  , ffi_fields =
+    [ ("SDL_Rect", "r", ["x", "y", "w", "h"])
+    , ("SDL_Surface", "s", ["w", "h"])
+    , ("SDL_Event", "e", ["type", "key"])
+    , ("SDL_KeyboardEvent", "ke", ["keysym"])
+    , ("SDL_Keysym", "ks", ["sym"])
+    ]
+  , ffi_values =
+    [ "SDL_QUIT"
+    , "SDL_KEYDOWN"
+    , "SDLK_UP"
+    , "SDLK_DOWN"
+    , "SDLK_LEFT"
+    , "SDLK_RIGHT"
+    ]
+  }
+
+pSep :: String -> String -> Maybe [String]
+pSep _ "" = return []
+pSep pat s = case pString pat s of
+  Nothing -> return [s]
+  Just (b,c) -> do
+    bs <- pSep pat c
+    return (b:bs)
+  
+pString :: String -> String -> Maybe (String, String)
+pString = loop "" ""
+  where
+    loop _     left ""     right           = Just (reverse left, right)
+    loop _     _    _      ""              = Nothing
+    loop saved left (p:ps) (r:rs) | r == p = loop (r:saved) left ps rs
+    loop ""    left pat    (r:rs)          = loop "" (r:left) pat rs
+    loop saved left pat    right           = loop "" (r:left) (ps ++ pat) (rs ++ right)
+      where
+        ps@(r:rs) = reverse saved
+
+pStrings :: [String] -> String -> Maybe [String]
+pStrings [] s = return [s]
+pStrings (p:ps) s = do
+  (b,c) <- pString p s
+  bs <- pStrings ps c
+  return (b:bs)
+
+pOr :: [String -> Maybe a] -> String -> Maybe a
+pOr [] _ = Nothing
+pOr (p:ps) s = case p s of
+  Nothing -> pOr ps s
+  Just a -> return a
+
+data Foo
+  = Fld String String String String String
+  | Val String String
+  | Ty String (String, String)
+  | Fun String [String] String
+  deriving (Show, Eq)
+
+-- gFoo x = case x of
+--   Ty a b -> 
+    
+pFoo = pOr
+  [ \s -> do
+      ["",b,c,d,e,f] <- pStrings ["@_fld_", " = global ", "* ", "@_rec_", "_rec_"] s
+      return $ Fld b c d e f
+  , \s -> do
+      ["",b,c,_] <- pStrings ["@_val_", " = global i32 ", ","] s
+      return $ Val b c
+  , \s -> do
+      [a,b] <- pStrings [" = type "] s
+      ("",d) <- pOr
+        [ pString "%struct."
+        , pString "%union."
+        ] a
+      return $ Ty a (d, b)
+  , \s -> do
+      ["", b, c, d, ""] <- pStrings ["declare ", " @", "(", ")"] s
+      ds <- pSep ", " d
+      return $ Fun c ds b
+  ]
+
+pFoos = catMaybes . map pFoo
+
+sdl_lines =
+  [ "%struct.anon = type { i32, i8*, %struct.anon.0 }"
+  , "%struct.anon.0 = type { i8*, i32, i32 }"
+  , "%struct.SDL_BlitMap = type opaque"
+  , "%struct.SDL_Color = type { i8, i8, i8, i8 }"
+  , "%struct.SDL_KeyboardEvent = type { i32, i32, i32, i8, i8, i8, i8, %struct.SDL_Keysym }"
+  , "%struct.SDL_Keysym = type { i32, i32, i16, i32 }"
+  , "%struct.SDL_Palette = type { i32, %struct.SDL_Color*, i32, i32 }"
+  , "%struct.SDL_PixelFormat = type { i32, %struct.SDL_Palette*, i8, i8, [2 x i8], i32, i32, i32, i32, i8, i8, i8, i8, i8, i8, i8, i8, i32, %struct.SDL_PixelFormat* }"
+  , "%struct.SDL_Rect = type { i32, i32, i32, i32 }"
+  , "%struct.SDL_Renderer = type opaque"
+  , "%struct.SDL_RWops = type { i64 (%struct.SDL_RWops*)*, i64 (%struct.SDL_RWops*, i64, i32)*, i32 (%struct.SDL_RWops*, i8*, i32, i32)*, i32 (%struct.SDL_RWops*, i8*, i32, i32)*, i32 (%struct.SDL_RWops*)*, i32, %union.anon }"
+  , "%struct.SDL_Surface = type { i32, %struct.SDL_PixelFormat*, i32, i32, i32, i8*, i8*, i32, i8*, %struct.SDL_Rect, %struct.SDL_BlitMap*, i32 }"
+  , "%struct.SDL_Texture = type opaque"
+  , "%struct.SDL_TouchFingerEvent = type { i32, i32, i64, i64, float, float, float, float, float }"
+  , "%struct.SDL_Window = type opaque"
+  , "%union.anon = type { %struct.anon }"
+  , "%union.SDL_Event = type { %struct.SDL_TouchFingerEvent, [8 x i8] }"
+  , "; ModuleID = 't.c++'"
+  , "@_fld_e_key = global %struct.SDL_KeyboardEvent* bitcast ({ i32, [52 x i8] }* @_rec_SDL_Event_rec_ to %struct.SDL_KeyboardEvent*), align 4"
+  , "@_fld_e_type = global i32* getelementptr inbounds ({ i32, [52 x i8] }* @_rec_SDL_Event_rec_, i32 0, i32 0), align 4"
+  , "@_fld_ke_keysym = global %struct.SDL_Keysym* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_KeyboardEvent* @_rec_SDL_KeyboardEvent_rec_ to i8*), i64 16) to %struct.SDL_Keysym*), align 4"
+  , "@_fld_ks_sym = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Keysym* @_rec_SDL_Keysym_rec_ to i8*), i64 4) to i32*), align 4"
+  , "@_fld_r_h = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Rect* @_rec_SDL_Rect_rec_ to i8*), i64 12) to i32*), align 4"
+  , "@_fld_r_w = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Rect* @_rec_SDL_Rect_rec_ to i8*), i64 8) to i32*), align 4"
+  , "@_fld_r_x = global i32* getelementptr inbounds (%struct.SDL_Rect* @_rec_SDL_Rect_rec_, i32 0, i32 0), align 4"
+  , "@_fld_r_y = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Rect* @_rec_SDL_Rect_rec_ to i8*), i64 4) to i32*), align 4"
+  , "@_fld_s_h = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Surface* @_rec_SDL_Surface_rec_ to i8*), i64 12) to i32*), align 4"
+  , "@_fld_s_w = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Surface* @_rec_SDL_Surface_rec_ to i8*), i64 8) to i32*), align 4"
+  , "@_fun_SDL_ConvertSurface = global %struct.SDL_Surface* (%struct.SDL_Surface*, %struct.SDL_PixelFormat*, i32)* @SDL_ConvertSurface, align 4"
+  , "@_fun_SDL_CreateRenderer = global %struct.SDL_Renderer* (%struct.SDL_Window*, i32, i32)* @SDL_CreateRenderer, align 4"
+  , "@_fun_SDL_CreateTextureFromSurface = global %struct.SDL_Texture* (%struct.SDL_Renderer*, %struct.SDL_Surface*)* @SDL_CreateTextureFromSurface, align 4"
+  , "@_fun_SDL_CreateWindow = global %struct.SDL_Window* (i8*, i32, i32, i32, i32, i32)* @SDL_CreateWindow, align 4"
+  , "@_fun_SDL_DestroyRenderer = global void (%struct.SDL_Renderer*)* @SDL_DestroyRenderer, align 4"
+  , "@_fun_SDL_DestroyTexture = global void (%struct.SDL_Texture*)* @SDL_DestroyTexture, align 4"
+  , "@_fun_SDL_DestroyWindow = global void (%struct.SDL_Window*)* @SDL_DestroyWindow, align 4"
+  , "@_fun_SDL_FreeSurface = global void (%struct.SDL_Surface*)* @SDL_FreeSurface, align 4"
+  , "@_fun_SDL_GetError = global i8* ()* @SDL_GetError, align 4"
+  , "@_fun_SDL_GetWindowSurface = global %struct.SDL_Surface* (%struct.SDL_Window*)* @SDL_GetWindowSurface, align 4"
+  , "@_fun_SDL_Init = global i32 (i32)* @SDL_Init, align 4"
+  , "@_fun_SDL_LoadBMP_RW = global %struct.SDL_Surface* (%struct.SDL_RWops*, i32)* @SDL_LoadBMP_RW, align 4"
+  , "@_fun_SDL_PollEvent = global i32 (%union.SDL_Event*)* @SDL_PollEvent, align 4"
+  , "@_fun_SDL_Quit = global void ()* @SDL_Quit, align 4"
+  , "@_fun_SDL_RenderClear = global i32 (%struct.SDL_Renderer*)* @SDL_RenderClear, align 4"
+  , "@_fun_SDL_RenderCopy = global i32 (%struct.SDL_Renderer*, %struct.SDL_Texture*, %struct.SDL_Rect*, %struct.SDL_Rect*)* @SDL_RenderCopy, align 4"
+  , "@_fun_SDL_RenderPresent = global void (%struct.SDL_Renderer*)* @SDL_RenderPresent, align 4"
+  , "@_fun_SDL_SetRenderDrawColor = global i32 (%struct.SDL_Renderer*, i8, i8, i8, i8)* @SDL_SetRenderDrawColor, align 4"
+  , "@_rec_SDL_Event_rec_ = global { i32, [52 x i8] } { i32 0, [52 x i8] undef }, align 8"
+  , "@_rec_SDL_KeyboardEvent_rec_ = global %struct.SDL_KeyboardEvent zeroinitializer, align 4"
+  , "@_rec_SDL_Keysym_rec_ = global %struct.SDL_Keysym zeroinitializer, align 4"
+  , "@_rec_SDL_Rect_rec_ = global %struct.SDL_Rect zeroinitializer, align 4"
+  , "@_rec_SDL_Surface_rec_ = global %struct.SDL_Surface zeroinitializer, align 4"
+  , "@_val_SDL_KEYDOWN = global i32 768, align 4"
+  , "@_val_SDL_QUIT = global i32 256, align 4"
+  , "@_val_SDLK_DOWN = global i32 1073741905, align 4"
+  , "@_val_SDLK_LEFT = global i32 1073741904, align 4"
+  , "@_val_SDLK_RIGHT = global i32 1073741903, align 4"
+  , "@_val_SDLK_UP = global i32 1073741906, align 4"
+  , "declare %struct.SDL_Renderer* @SDL_CreateRenderer(%struct.SDL_Window*, i32, i32)"
+  , "declare %struct.SDL_Surface* @SDL_ConvertSurface(%struct.SDL_Surface*, %struct.SDL_PixelFormat*, i32)"
+  , "declare %struct.SDL_Surface* @SDL_GetWindowSurface(%struct.SDL_Window*)"
+  , "declare %struct.SDL_Surface* @SDL_LoadBMP_RW(%struct.SDL_RWops*, i32)"
+  , "declare %struct.SDL_Texture* @SDL_CreateTextureFromSurface(%struct.SDL_Renderer*, %struct.SDL_Surface*)"
+  , "declare %struct.SDL_Window* @SDL_CreateWindow(i8*, i32, i32, i32, i32, i32)"
+  , "declare i32 @SDL_Init(i32)"
+  , "declare i32 @SDL_PollEvent(%union.SDL_Event*)"
+  , "declare i32 @SDL_RenderClear(%struct.SDL_Renderer*)"
+  , "declare i32 @SDL_RenderCopy(%struct.SDL_Renderer*, %struct.SDL_Texture*, %struct.SDL_Rect*, %struct.SDL_Rect*)"
+  , "declare i32 @SDL_SetRenderDrawColor(%struct.SDL_Renderer*, i8 zeroext, i8 zeroext, i8 zeroext, i8 zeroext)"
+  , "declare i8* @SDL_GetError()"
+  , "declare void @SDL_DestroyRenderer(%struct.SDL_Renderer*)"
+  , "declare void @SDL_DestroyTexture(%struct.SDL_Texture*)"
+  , "declare void @SDL_DestroyWindow(%struct.SDL_Window*)"
+  , "declare void @SDL_FreeSurface(%struct.SDL_Surface*)"
+  , "declare void @SDL_Quit()"
+  , "declare void @SDL_RenderPresent(%struct.SDL_Renderer*)"
+  ]
+-- print $ foo "@_fld_ks_sym = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Keysym* @_rec_SDL_Keysym_rec_ to i8*), i64 4) to i32*), align 4"
+-- print $ foo "%struct.SDL_Color = type { i8, i8, i8, i8 }"
+-- print $ foo "@_val_SDL_KEYDOWN = global i32 768, align 4"
+-- print $ foo "declare %struct.SDL_Renderer* @SDL_CreateRenderer(%struct.SDL_Window*, i32, i32)"
+
+{-
 import Control.Monad.State hiding (forever)
 import Data.Char
 import Data.Foldable
@@ -662,27 +877,6 @@ keysym = fld 7
 
 type SDL_Keycode = Int
 
---     SDL_KeyboardEvent key;          /**< Keyboard event data */
--- typedef struct SDL_KeyboardEvent
--- {
---     Uint32 type;        /**< ::SDL_KEYDOWN or ::SDL_KEYUP */
---     Uint32 timestamp;
---     Uint32 windowID;    /**< The window with keyboard focus, if any */
---     Uint8 state;        /**< ::SDL_PRESSED or ::SDL_RELEASED */
---     Uint8 repeat;       /**< Non-zero if this is a key repeat */
---     Uint8 padding2;
---     Uint8 padding3;
---     SDL_Keysym keysym;  /**< The key that was pressed or released */
--- } SDL_KeyboardEvent;
-
--- typedef struct SDL_Keysym
--- {
---     SDL_Scancode scancode;      /**< SDL physical key code - see ::SDL_Scancode for details */
---     SDL_Keycode sym;            /**< SDL virtual key code - see ::SDL_Keycode for details */
---     Uint16 mod;                 /**< current key modifiers */
---     Uint32 unused;
--- } SDL_Keysym;
-
 char :: Char -> Val Char
 char = Lit
 
@@ -795,6 +989,7 @@ main = eval $ do
 --     br $ Label 0
 --     call "foo" (x, v)
 --     ret
+-}
 
 {-
 
@@ -1117,6 +1312,9 @@ mkIf x (y,z) = E
   where
     v = Op "if" [uaexp x, aexp y, aexp z]
     k = hash v
+
+wrapFlags x = [x] -- "nuw nsw"
+fastMathFlags x = [x] -- ""
 
 sub :: TyNum a => E a -> E a -> E a
 sub = binop (-) $ wrapFlags "sub"
@@ -1687,9 +1885,6 @@ tt = t 3
 --   (Right a, Right b) -> lit $ f a b
 --   _ -> stmt [ssa x, ssa y] $
 --        \[ppa, ppb] -> commaSep [ss ++ [ty (unused :: c), ppa ], [ppb] ]
-
-wrapFlags x = [x] -- "nuw nsw"
-fastMathFlags x = [x] -- ""
 
 -- commaSep = concat . intersperse ", " . fmap unwords
 
