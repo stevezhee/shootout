@@ -8,14 +8,33 @@ ifeq ($(UNAME), Linux)
 else
 	EXE = ~/AppData/Roaming/local/bin/shootout.exe
 endif
+ifeq ($(UNAME), Linux)
+	FFI-EXE = ~/.local/bin/shootout-ffi
+else
+	FFI-EXE = ~/AppData/Roaming/local/bin/shootout-ffi.exe
+endif
 
-all :
+all : shoot
+shoot :
 	stack install
-	$(EXE)
-	shootout > t.ll
-	llc t.ll
-	clang t.s -lSDL2
-	./a.out
+#	$(EXE)
+
+ffi :
+	stack install
+	$(FFI-EXE)
+	mv SDL.hs src
+	# shootout > t.ll
+	# llc t.ll
+	# clang t.s -lSDL2
+	# ./a.out
+
+ffi_switch :
+	mv shootout.cabal shootout.cabal.keep
+	mv shootout-ffi.cabal.keep shootout-ffi.cabal
+
+switch :
+	mv shootout-ffi.cabal shootout-ffi.cabal.keep
+	mv shootout.cabal.keep shootout.cabal
 
 # all : a.exe nbody.exe fannkuch.exe spectral.exe
 # 	ls -al $^

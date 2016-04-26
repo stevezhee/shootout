@@ -4,969 +4,14 @@
 
 module Main where
 
--- import Data.List
-import Data.Maybe
+-- import Prelude hiding (lookup)
+import Shoot
+import SDL
+-- import Data.List (sort, intersperse)
+-- import Data.Map
+-- import Data.Maybe
 -- import Data.Char
-
-data FFI = FFI
-  { ffi_pre :: [String]
-  , ffi_procs :: [String]
-  , ffi_fields :: [(String, String, [String])]
-  , ffi_values :: [String]
-  }
-
-main = putStrLn $ ffi_genc sdl_ffi
-
-ffi_field_genc :: (String, String, [String]) -> String
-ffi_field_genc (a, b, cs) = unlines $
-    [ a ++ " " ++ n ++ ";" ] ++
-    [ "auto _fld_" ++ b ++ "_" ++ c ++ " = &" ++ n ++ "." ++ c ++ ";" | c <- cs ]
-  where
-    n = "_rec_" ++ a ++ "_rec_"
-  
-ffi_genc x = unlines $
-  ffi_pre x ++
-  map ffi_field_genc (ffi_fields x) ++
-  [ "auto _fun_" ++ i ++ " = " ++ i ++ ";" | i <- ffi_procs x ] ++
-  [ "int _val_" ++ i ++ " = " ++ i ++ ";" | i <- ffi_values x ]
-  
-sdl_ffi = FFI
-  { ffi_pre =
-    [ "#include <stdio.h>"
-    , "#include <SDL2/SDL.h>"
-    ]
-  , ffi_procs =
-    [ "SDL_Init"
-    , "SDL_CreateWindow"
-    , "SDL_DestroyTexture"
-    , "SDL_DestroyRenderer"
-    , "SDL_DestroyWindow"
-    , "SDL_Quit"
-    , "SDL_GetWindowSurface"
-    , "SDL_GetError"
-    , "SDL_CreateRenderer"
-    , "SDL_SetRenderDrawColor"
-    , "SDL_LoadBMP_RW"
-    , "SDL_ConvertSurface"
-    , "SDL_CreateTextureFromSurface"
-    , "SDL_FreeSurface"
-    , "SDL_PollEvent"
-    , "SDL_RenderClear"
-    , "SDL_RenderCopy"
-    , "SDL_RenderPresent"
-    ]
-  , ffi_fields =
-    [ ("SDL_Rect", "r", ["x", "y", "w", "h"])
-    , ("SDL_Surface", "s", ["w", "h"])
-    , ("SDL_Event", "e", ["type", "key"])
-    , ("SDL_KeyboardEvent", "ke", ["keysym"])
-    , ("SDL_Keysym", "ks", ["sym"])
-    ]
-  , ffi_values =
-    [ "SDL_QUIT"
-    , "SDL_KEYDOWN"
-    , "SDLK_UP"
-    , "SDLK_DOWN"
-    , "SDLK_LEFT"
-    , "SDLK_RIGHT"
-    ]
-  }
-
-pSep :: String -> String -> Maybe [String]
-pSep _ "" = return []
-pSep pat s = case pString pat s of
-  Nothing -> return [s]
-  Just (b,c) -> do
-    bs <- pSep pat c
-    return (b:bs)
-  
-pString :: String -> String -> Maybe (String, String)
-pString = loop "" ""
-  where
-    loop _     left ""     right           = Just (reverse left, right)
-    loop _     _    _      ""              = Nothing
-    loop saved left (p:ps) (r:rs) | r == p = loop (r:saved) left ps rs
-    loop ""    left pat    (r:rs)          = loop "" (r:left) pat rs
-    loop saved left pat    right           = loop "" (r:left) (ps ++ pat) (rs ++ right)
-      where
-        ps@(r:rs) = reverse saved
-
-pStrings :: [String] -> String -> Maybe [String]
-pStrings [] s = return [s]
-pStrings (p:ps) s = do
-  (b,c) <- pString p s
-  bs <- pStrings ps c
-  return (b:bs)
-
-pOr :: [String -> Maybe a] -> String -> Maybe a
-pOr [] _ = Nothing
-pOr (p:ps) s = case p s of
-  Nothing -> pOr ps s
-  Just a -> return a
-
-data Foo
-  = Fld String String String String String
-  | Val String String
-  | Ty String (String, String)
-  | Fun String [String] String
-  deriving (Show, Eq)
-
--- gFoo x = case x of
---   Ty a b -> 
-    
-pFoo = pOr
-  [ \s -> do
-      ["",b,c,d,e,f] <- pStrings ["@_fld_", " = global ", "* ", "@_rec_", "_rec_"] s
-      return $ Fld b c d e f
-  , \s -> do
-      ["",b,c,_] <- pStrings ["@_val_", " = global i32 ", ","] s
-      return $ Val b c
-  , \s -> do
-      [a,b] <- pStrings [" = type "] s
-      ("",d) <- pOr
-        [ pString "%struct."
-        , pString "%union."
-        ] a
-      return $ Ty a (d, b)
-  , \s -> do
-      ["", b, c, d, ""] <- pStrings ["declare ", " @", "(", ")"] s
-      ds <- pSep ", " d
-      return $ Fun c ds b
-  ]
-
-pFoos = catMaybes . map pFoo
-
-sdl_lines =
-  [ "%struct.anon = type { i32, i8*, %struct.anon.0 }"
-  , "%struct.anon.0 = type { i8*, i32, i32 }"
-  , "%struct.SDL_BlitMap = type opaque"
-  , "%struct.SDL_Color = type { i8, i8, i8, i8 }"
-  , "%struct.SDL_KeyboardEvent = type { i32, i32, i32, i8, i8, i8, i8, %struct.SDL_Keysym }"
-  , "%struct.SDL_Keysym = type { i32, i32, i16, i32 }"
-  , "%struct.SDL_Palette = type { i32, %struct.SDL_Color*, i32, i32 }"
-  , "%struct.SDL_PixelFormat = type { i32, %struct.SDL_Palette*, i8, i8, [2 x i8], i32, i32, i32, i32, i8, i8, i8, i8, i8, i8, i8, i8, i32, %struct.SDL_PixelFormat* }"
-  , "%struct.SDL_Rect = type { i32, i32, i32, i32 }"
-  , "%struct.SDL_Renderer = type opaque"
-  , "%struct.SDL_RWops = type { i64 (%struct.SDL_RWops*)*, i64 (%struct.SDL_RWops*, i64, i32)*, i32 (%struct.SDL_RWops*, i8*, i32, i32)*, i32 (%struct.SDL_RWops*, i8*, i32, i32)*, i32 (%struct.SDL_RWops*)*, i32, %union.anon }"
-  , "%struct.SDL_Surface = type { i32, %struct.SDL_PixelFormat*, i32, i32, i32, i8*, i8*, i32, i8*, %struct.SDL_Rect, %struct.SDL_BlitMap*, i32 }"
-  , "%struct.SDL_Texture = type opaque"
-  , "%struct.SDL_TouchFingerEvent = type { i32, i32, i64, i64, float, float, float, float, float }"
-  , "%struct.SDL_Window = type opaque"
-  , "%union.anon = type { %struct.anon }"
-  , "%union.SDL_Event = type { %struct.SDL_TouchFingerEvent, [8 x i8] }"
-  , "; ModuleID = 't.c++'"
-  , "@_fld_e_key = global %struct.SDL_KeyboardEvent* bitcast ({ i32, [52 x i8] }* @_rec_SDL_Event_rec_ to %struct.SDL_KeyboardEvent*), align 4"
-  , "@_fld_e_type = global i32* getelementptr inbounds ({ i32, [52 x i8] }* @_rec_SDL_Event_rec_, i32 0, i32 0), align 4"
-  , "@_fld_ke_keysym = global %struct.SDL_Keysym* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_KeyboardEvent* @_rec_SDL_KeyboardEvent_rec_ to i8*), i64 16) to %struct.SDL_Keysym*), align 4"
-  , "@_fld_ks_sym = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Keysym* @_rec_SDL_Keysym_rec_ to i8*), i64 4) to i32*), align 4"
-  , "@_fld_r_h = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Rect* @_rec_SDL_Rect_rec_ to i8*), i64 12) to i32*), align 4"
-  , "@_fld_r_w = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Rect* @_rec_SDL_Rect_rec_ to i8*), i64 8) to i32*), align 4"
-  , "@_fld_r_x = global i32* getelementptr inbounds (%struct.SDL_Rect* @_rec_SDL_Rect_rec_, i32 0, i32 0), align 4"
-  , "@_fld_r_y = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Rect* @_rec_SDL_Rect_rec_ to i8*), i64 4) to i32*), align 4"
-  , "@_fld_s_h = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Surface* @_rec_SDL_Surface_rec_ to i8*), i64 12) to i32*), align 4"
-  , "@_fld_s_w = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Surface* @_rec_SDL_Surface_rec_ to i8*), i64 8) to i32*), align 4"
-  , "@_fun_SDL_ConvertSurface = global %struct.SDL_Surface* (%struct.SDL_Surface*, %struct.SDL_PixelFormat*, i32)* @SDL_ConvertSurface, align 4"
-  , "@_fun_SDL_CreateRenderer = global %struct.SDL_Renderer* (%struct.SDL_Window*, i32, i32)* @SDL_CreateRenderer, align 4"
-  , "@_fun_SDL_CreateTextureFromSurface = global %struct.SDL_Texture* (%struct.SDL_Renderer*, %struct.SDL_Surface*)* @SDL_CreateTextureFromSurface, align 4"
-  , "@_fun_SDL_CreateWindow = global %struct.SDL_Window* (i8*, i32, i32, i32, i32, i32)* @SDL_CreateWindow, align 4"
-  , "@_fun_SDL_DestroyRenderer = global void (%struct.SDL_Renderer*)* @SDL_DestroyRenderer, align 4"
-  , "@_fun_SDL_DestroyTexture = global void (%struct.SDL_Texture*)* @SDL_DestroyTexture, align 4"
-  , "@_fun_SDL_DestroyWindow = global void (%struct.SDL_Window*)* @SDL_DestroyWindow, align 4"
-  , "@_fun_SDL_FreeSurface = global void (%struct.SDL_Surface*)* @SDL_FreeSurface, align 4"
-  , "@_fun_SDL_GetError = global i8* ()* @SDL_GetError, align 4"
-  , "@_fun_SDL_GetWindowSurface = global %struct.SDL_Surface* (%struct.SDL_Window*)* @SDL_GetWindowSurface, align 4"
-  , "@_fun_SDL_Init = global i32 (i32)* @SDL_Init, align 4"
-  , "@_fun_SDL_LoadBMP_RW = global %struct.SDL_Surface* (%struct.SDL_RWops*, i32)* @SDL_LoadBMP_RW, align 4"
-  , "@_fun_SDL_PollEvent = global i32 (%union.SDL_Event*)* @SDL_PollEvent, align 4"
-  , "@_fun_SDL_Quit = global void ()* @SDL_Quit, align 4"
-  , "@_fun_SDL_RenderClear = global i32 (%struct.SDL_Renderer*)* @SDL_RenderClear, align 4"
-  , "@_fun_SDL_RenderCopy = global i32 (%struct.SDL_Renderer*, %struct.SDL_Texture*, %struct.SDL_Rect*, %struct.SDL_Rect*)* @SDL_RenderCopy, align 4"
-  , "@_fun_SDL_RenderPresent = global void (%struct.SDL_Renderer*)* @SDL_RenderPresent, align 4"
-  , "@_fun_SDL_SetRenderDrawColor = global i32 (%struct.SDL_Renderer*, i8, i8, i8, i8)* @SDL_SetRenderDrawColor, align 4"
-  , "@_rec_SDL_Event_rec_ = global { i32, [52 x i8] } { i32 0, [52 x i8] undef }, align 8"
-  , "@_rec_SDL_KeyboardEvent_rec_ = global %struct.SDL_KeyboardEvent zeroinitializer, align 4"
-  , "@_rec_SDL_Keysym_rec_ = global %struct.SDL_Keysym zeroinitializer, align 4"
-  , "@_rec_SDL_Rect_rec_ = global %struct.SDL_Rect zeroinitializer, align 4"
-  , "@_rec_SDL_Surface_rec_ = global %struct.SDL_Surface zeroinitializer, align 4"
-  , "@_val_SDL_KEYDOWN = global i32 768, align 4"
-  , "@_val_SDL_QUIT = global i32 256, align 4"
-  , "@_val_SDLK_DOWN = global i32 1073741905, align 4"
-  , "@_val_SDLK_LEFT = global i32 1073741904, align 4"
-  , "@_val_SDLK_RIGHT = global i32 1073741903, align 4"
-  , "@_val_SDLK_UP = global i32 1073741906, align 4"
-  , "declare %struct.SDL_Renderer* @SDL_CreateRenderer(%struct.SDL_Window*, i32, i32)"
-  , "declare %struct.SDL_Surface* @SDL_ConvertSurface(%struct.SDL_Surface*, %struct.SDL_PixelFormat*, i32)"
-  , "declare %struct.SDL_Surface* @SDL_GetWindowSurface(%struct.SDL_Window*)"
-  , "declare %struct.SDL_Surface* @SDL_LoadBMP_RW(%struct.SDL_RWops*, i32)"
-  , "declare %struct.SDL_Texture* @SDL_CreateTextureFromSurface(%struct.SDL_Renderer*, %struct.SDL_Surface*)"
-  , "declare %struct.SDL_Window* @SDL_CreateWindow(i8*, i32, i32, i32, i32, i32)"
-  , "declare i32 @SDL_Init(i32)"
-  , "declare i32 @SDL_PollEvent(%union.SDL_Event*)"
-  , "declare i32 @SDL_RenderClear(%struct.SDL_Renderer*)"
-  , "declare i32 @SDL_RenderCopy(%struct.SDL_Renderer*, %struct.SDL_Texture*, %struct.SDL_Rect*, %struct.SDL_Rect*)"
-  , "declare i32 @SDL_SetRenderDrawColor(%struct.SDL_Renderer*, i8 zeroext, i8 zeroext, i8 zeroext, i8 zeroext)"
-  , "declare i8* @SDL_GetError()"
-  , "declare void @SDL_DestroyRenderer(%struct.SDL_Renderer*)"
-  , "declare void @SDL_DestroyTexture(%struct.SDL_Texture*)"
-  , "declare void @SDL_DestroyWindow(%struct.SDL_Window*)"
-  , "declare void @SDL_FreeSurface(%struct.SDL_Surface*)"
-  , "declare void @SDL_Quit()"
-  , "declare void @SDL_RenderPresent(%struct.SDL_Renderer*)"
-  ]
--- print $ foo "@_fld_ks_sym = global i32* bitcast (i8* getelementptr (i8* bitcast (%struct.SDL_Keysym* @_rec_SDL_Keysym_rec_ to i8*), i64 4) to i32*), align 4"
--- print $ foo "%struct.SDL_Color = type { i8, i8, i8, i8 }"
--- print $ foo "@_val_SDL_KEYDOWN = global i32 768, align 4"
--- print $ foo "declare %struct.SDL_Renderer* @SDL_CreateRenderer(%struct.SDL_Window*, i32, i32)"
-
-{-
-import Control.Monad.State hiding (forever)
-import Data.Char
-import Data.Foldable
-import Data.List (intersperse)
-import Data.Map.Strict (Map)
-import Data.Set (Set)
-import Data.Word
-import GHC.Generics (Generic)
-import Numeric
-import Prelude hiding (concat, foldr, maximum)
-import qualified Data.Map.Strict as M
-import qualified Data.Set as S
-
-data Val a = Lit a | Var Type Name deriving Show
-
-data Ptr a = Ptr{ unPtr :: Int }
-  deriving (Show, Generic, Eq, Ord)
-
-type Type = String
-
-data St = St
-  { next :: Int
-  , strings :: Map String (Val (Ptr (Ptr Char)))
-  , decls :: Set String
-  -- , structs :: Map [Type] Type
-  } deriving Show
-    
-type M a = StateT St IO a
-
--- class PP a where ppu :: a -> String
-
-data TyRec a = TyRec
-  { _ty :: Val a -> M Type
-  , _toULit :: a -> M ULit
-  , _unULit :: ULit -> a
-  }
-
-ty :: Ty a => Val a -> M Type
-ty = _ty tyRec
-
-toULit :: Ty a => a -> M ULit
-toULit = _toULit tyRec
-
-unULit :: Ty a => ULit -> a
-unULit = _unULit tyRec
-
-type P a = Val (Ptr a)
-
-data ULit
-  = LInt{ unLInt :: Int }
-  | LWord8{ unLWord8 :: Word8 }
-  | LBool{ unLBool :: Bool }
-  | LPtr Int Type
-  deriving (Show, Generic, Eq, Ord)
-
-class Ty a where tyRec :: TyRec a
-
-tyRecInt :: (Int -> a) -> (a -> Int) -> TyRec a
-tyRecInt f g = tyRecPrim "i32" (LInt . g) (f . unLInt)
-
-tyRecWord8 :: (Word8 -> a) -> (a -> Word8) -> TyRec a
-tyRecWord8 f g = tyRecPrim "i8" (LWord8 . g) (f . unLWord8)
-
-tyRecPrim t f g = TyRec
-  { _ty = return . const t
-  , _toULit = return . f
-  , _unULit = g
-  }
-
-instance Ty Int where tyRec = tyRecInt id id
-instance Ty Word8 where tyRec = tyRecWord8 id id
-instance Ty Bool where tyRec = tyRecPrim "i1" LBool unLBool
-instance Ty Char where tyRec = tyRecWord8 (toEnum . fromIntegral) (fromIntegral . fromEnum)
-
-concatM :: [M String] -> M String
-concatM xs = concat <$> sequence xs
-
-unwordsM :: [M String] -> M String
-unwordsM xs = unwords <$> sequence xs
-    
-unused s = error $ "unused:" ++ s
-
-instance Ty a => Ty (Ptr a) where
-  tyRec = TyRec
-    { _ty = const $ concatM [ ty (unused "ty (Ptr a)" :: Val a), return "*" ]
-    , _toULit = \x@(Ptr a) -> LPtr a <$> ty (Lit x)
-    , _unULit = \(LPtr a _) -> Ptr a
-    }
-
-callM v x y = [ unwordsM [tyRet v, concatM [procName x, args y ] ] ]
-retM x = outputM2 $ unwordsM [return "ret", x]
-
-instance Ty a => Ret (Val a) where
-  call (Proc x _) y = assign $ \v -> prim_ "call" $ callM v x y
-  ret x = retM (pp x) >> return x
-  tyRet = ty
-  
-instance Ret () where
-  call (Proc x _) y = prim "call" $ callM () x y
-  ret () = retM (return "void")
-  tyRet _ = return "void"
-    
-class Ret b where
-  call :: Agg a => Proc a b -> a -> M b
-  ret :: b -> M b
-  tyRet :: b -> M Type
-
-class Agg a where
-  unAgg :: Tree UVal -> a
-  agg :: a -> M (Tree UVal)
-  instantiate :: M a
-
-fresh :: M Int
-fresh = do
-  i <- gets next
-  modify $ \st -> st{ next = succ i }
-  return i
-
-store' :: Ty a => P a -> Val a -> M ()
-store' = flip store
-
-store :: Ty a => Val a -> P a -> M ()
-store x y = prim "store" [pp x, pp y]
-
-prim :: String -> [M String] -> M ()
-prim x = outputM2 . prim_ x
-
-indent :: Int -> M String -> M String
-indent n m = concatM [return $ replicate n ' ', m]
-
-outputM :: M String -> M ()
-outputM x = x >>= output
-
-outputM2 :: M String -> M ()
-outputM2 x = indent 2 x >>= output
-
-output :: String -> M ()
-output = lift . putStrLn
-
-commaSep :: [M String] -> M String
-commaSep = concatM . intersperse (return ", ")
-
-prim_ :: String -> [M String] -> M String
-prim_ x ys = unwordsM [return x, commaSep ys]
-
-pp :: Ty a => Val a -> M String
-pp x = toUVal x >>= ppUValT
-
-ppu :: Ty a => Val a -> M String
-ppu x = toUVal x >>= ppUVal
-
-ppULit :: ULit -> M String
-ppULit x = return $ case x of
-  LInt a -> show a
-  LWord8 a -> show a
-  LBool a -> case a of
-    True -> "true"
-    False -> "false"
-  LPtr a _ -> if a == 0 then "null" else show a
-
-ppUValT :: UVal -> M String
-ppUValT x = unwordsM [tyUVal x, ppUVal x]
-                      
-ppUVal :: UVal -> M String
-ppUVal x = case x of
-  Lit a -> ppULit a
-  Var _ s -> return s
-  
-type UVal = Val ULit
-
-toUVal :: Ty a => Val a -> M UVal
-toUVal x = case x of
-  Var a b -> return $ Var a b
-  Lit a -> Lit <$> toULit a
-
-br :: Label -> M ()
-br x = prim "br" [ppLabel x]
-
-data Label = Label{ unLabel :: Int } deriving Show
-
-ppULabel = (++) "L" . show . unLabel
-
-ppLabel x = return $ unwords ["label", "%" ++ ppULabel x]
-
-alloca' :: Ty a => M (P a)
-alloca' = alloca $ int 1
-
-bitcast :: (Ty a, Ty b) => Val a -> M (Val b)
-bitcast x = assign $ \v -> prim_ "bitcast" [unwordsM [pp x, return "to", ty v]]
-
-alloca :: Ty a => IntT -> M (P a)
-alloca n = assign $ \(_ :: P a) -> prim_ "alloca" [ty (unused "alloca" :: Val a), pp n]
-
-idx :: Ty a => P a -> IntT -> M (P a)
-idx (x :: P a) n = assign $ \_ -> prim_ "getelementptr inbounds" [pp x, pp n]
-
-fld :: (Ty a, Ty b) => Int -> P a -> M (P b)
-fld n (x :: P a) =
-  assign $ \_ -> prim_ "getelementptr inbounds" [pp x, pp $ int 0, pp $ Lit n]
-
-add :: Ty a => Val a -> Val a -> M (Val a)
-add x y = assign $ \_ -> prim_ "add" [pp x, ppu y]
-
-eq :: Ty a => Val a -> Val a -> M BoolT
-eq x y = assign $ \_ -> prim_ "icmp eq" [pp x, ppu y]
-
-ne :: Ty a => Val a -> Val a -> M BoolT
-ne x y = assign $ \_ -> prim_ "icmp ne" [pp x, ppu y]
-
-assign :: Ty a => (Val a -> M String) -> M (Val a)
-assign (f :: Val a -> M String) = do
-  v <- bvar <$> ty (unused "assign" :: Val a) <*> fresh
-  outputM2 $ unwordsM [ppu v, return "=", f v]
-  return v
-
-bvar t i = Var t $ "%v" ++ show i
-
-type IntT = Val Int
-type Word8T = Val Word8
-
-int :: Int -> IntT
-int = Lit
-
-w8 :: Word8 -> Word8T
-w8 = Lit
-
-unlinesM :: [M String] -> M String
-unlinesM xs = (init . unlines) <$> sequence xs
-  
-brackets :: [M String] -> M String
-brackets xs = unlinesM (return "[" : map (indent 4) xs ++ [indent 4 $ return "]"])
-
-switch' :: Ty a => Val a -> M () -> [(Val a, M ())] -> M ()
-switch' x y zs = do
-  done <- freshLabel
-  dflt <- freshLabel
-  lbls <- mapM (const freshLabel) zs
-  switch x dflt $ zip (map (unLit . fst) zs) lbls
-  sequence_ [ label lbl >> m >> br done | (lbl, m) <- (dflt, y) : zip lbls (map snd zs) ]
-  label done
-      
-switch :: Ty a => Val a -> Label -> [(a, Label)] -> M ()
-switch x y zs =
-  prim "switch" [ pp x, unwordsM [ppLabel y, brackets $ map f zs ] ]
-  where
-    f (a,b) = commaSep [ pp $ Lit a, ppLabel b ]
-
-braces :: M String -> M String
-braces x = unwordsM [return "{", x, return "}"]
-
--- declStruct :: ([Type], Type) -> M ()
--- declStruct (ts, t) =
---   unwordsM [ return t, return "= type", braces $ commaSep $ map return ts ] >>= output
-
-declString :: (String, Val (Ptr (Ptr Char))) -> M ()
-declString (x, y) = do
-  n <- ppu y
-  let s = n ++ ".str"
-  output $ unwords [ s, "= private unnamed_addr constant", t, escString x ++ ", align 1" ]
-  output $ unwords [ n
-                   , "= global i8* getelementptr inbounds (" ++ t ++ "*"
-                   , s ++ ", i32 0, i32 0), align 4" ]
-  where
-    t = "[" ++ show (length x + 1) ++ " x i8]"
-
-escString :: String -> String
-escString s = "c\"" ++ concatMap escChar (s ++ "\0") ++ "\""
-
-escChar :: Char -> [Char]
-escChar c
-  | c == '"' || c < ' ' || c > '~' = "\\" ++ map toUpper a'
-  | otherwise = [c]
-  where
-    a = showHex (fromEnum c) ""
-    a' = case a of
-      [_] -> "0" ++ a
-      _ -> a
-
-eval :: M () -> IO ()
-eval m = do
-  flip evalStateT (St 0 M.empty S.empty) $ do
-    mapM_ output
-      [ "%struct.SDL_Rect = type { i32, i32, i32, i32 }"
-      , "%struct.SDL_Color = type { i8, i8, i8, i8 }"
-      , "%struct.SDL_Palette = type { i32, %struct.SDL_Color*, i32, i32 }"
-      , "%struct.SDL_PixelFormat = type { i32, %struct.SDL_Palette*, i8, i8, [2 x i8], i32, i32, i32, i32, i8, i8, i8, i8, i8, i8, i8, i8, i32, %struct.SDL_PixelFormat* }"
-      , "%struct.SDL_BlitMap = type opaque"
-      , "%struct.SDL_Surface = type { i32, %struct.SDL_PixelFormat*, i32, i32, i32, i8*, i8*, i32, i8*, %struct.SDL_Rect, %struct.SDL_BlitMap*, i32 }"
-      , "%struct.SDL_Keysym = type { i32, i32, i16, i32 }"
-      , "%struct.SDL_KeyboardEvent = type { i32, i32, i32, i8, i8, i8, i8, %struct.SDL_Keysym }"
-      , "%struct.SDL_TouchFingerEvent = type { i32, i32, i64, i64, float, float, float, float, float }"
-      , "%union.SDL_Event = type { %struct.SDL_TouchFingerEvent, [8 x i8] }"
-      ]
-    () <- m
-    st <- get
-    mapM_ declString $ M.toList $ strings st
-    mapM_ output $ decls st
-    -- mapM_ declStruct $ M.toList $ structs st
-
-type Name = String
-
-data Proc a b = Proc Name (Maybe (a -> M b))
-
-proc :: (Agg a, Ret b) => Name -> (a -> M b) -> Proc a b
-proc x = Proc x . Just
-
-proc_ :: Ret b => Name -> M b -> Proc () b
-proc_ x m = proc x (\() -> m)
-
-inline :: Agg a => Proc a b -> a -> M b
-inline (Proc n mf) x = maybe (error $ "unable to inline ffi call:" ++ n) (\f -> f x) mf
-
-parens :: [M String] -> M String
-parens xs = concatM [return "(", commaSep xs, return ")"]
-    
-args :: Agg a => a -> M String
-args x = ((map ppUValT . toList) <$> agg x) >>= parens
-
-tyargs :: Agg a => a -> M String
-tyargs x = ((map tyUVal . toList) <$> agg x) >>= parens
-
-procName n = return ("@" ++ n)
-
-define :: (Agg a, Ret b) => Proc a b -> M ()
-define (Proc n Nothing) = error $ "unable to define ffi call:" ++ n
-define ((Proc n (Just f)) :: Proc a b) = do
-  a <- instantiate
-  outputM $ unwordsM [ return "define", tyRet (unused "define" :: b), procName n, args a ]
-  output "{"
-  _ <- f a
-  output "}"
- 
-unUVal :: Ty a => UVal -> Val a
-unUVal x = case x of
-  Var a b -> Var a b
-  Lit a -> Lit $ unULit a
-
-instance Ty a => Agg (Val a) where
-  unAgg (Leaf a) = unUVal a
-  unAgg _ = unused "unAgg"
-  agg x = Leaf <$> toUVal x
-  instantiate = f $ unused "instantiate"
-    where
-      f :: Val a -> M (Val a)
-      f a = bvar <$> ty a <*> fresh
-
-instance Agg () where
- unAgg (Node []) = ()
- unAgg _ = unused "unAgg"
- agg () = nodeM []
- instantiate = return ()
-
-nodeM xs = Node <$> sequence xs
-
-instance (Agg a, Agg b) => Agg (a, b) where
-  unAgg (Node [a,b]) = (unAgg a, unAgg b)
-  unAgg _ = unused "unAgg"
-  agg (a, b) = nodeM [agg a, agg b]
-  instantiate = (,) <$> instantiate <*> instantiate
- 
-instance (Agg a, Agg b, Agg c) => Agg (a, b, c) where
-  unAgg (Node [a,b,c]) = (unAgg a, unAgg b, unAgg c)
-  unAgg _ = unused "unAgg"
-  agg (a, b, c) = nodeM [agg a, agg b, agg c]
-  instantiate = (,,) <$> instantiate <*> instantiate <*> instantiate
- 
-instance (Agg a, Agg b, Agg c, Agg d) => Agg (a, b, c, d) where
-  unAgg (Node [a,b,c,d]) = (unAgg a, unAgg b, unAgg c, unAgg d)
-  unAgg _ = unused "unAgg"
-  agg (a, b, c, d) = nodeM [agg a, agg b, agg c, agg d]
-  instantiate = (,,,) <$> instantiate <*> instantiate <*> instantiate <*> instantiate
-
-data Tree a = Node [Tree a] | Leaf a deriving (Show, Eq, Generic)
-
-instance Foldable Tree where
-  foldr f b x = case x of
-    Leaf a -> f a b
-    Node ns -> foldr (flip (foldr f)) b ns
-
-instance Traversable Tree where
-  traverse f x = case x of
-    Leaf a -> Leaf <$> f a
-    Node ns -> Node <$> traverse (traverse f) ns
-
-instance Functor Tree where
-  fmap f x = case x of
-    Leaf a -> Leaf $ f a
-    Node ns -> Node $ fmap (fmap f) ns
-
-
-declare :: (Agg a, Ret b) => Name -> a -> b -> M ()
-declare n a v = do
-  t <- tyRet v
-  ts <- tyargs a
-  let s = "declare " ++ t ++ " @" ++ n ++ ts
-  modify $ \st -> st{ decls = S.insert s $ decls st }
-  
-ffi :: (Agg a, Ret b) => Name -> a -> M b
-ffi x y = do
-  b <- call (Proc x Nothing) y
-  declare x y b
-  return b
-
-type CString = P Char
-
-puts :: CString -> M ()
-puts = ffi "puts"
-
-tyUVal :: UVal -> M Type
-tyUVal x = case x of
-  Var t _ -> return t
-  Lit a -> case a of
-    LInt a -> ty $ Lit a
-    LBool a -> ty $ Lit a
-    LPtr _ t -> return t
-    LWord8 a -> ty $ Lit a
-
-  
-freshLabel :: M Label
-freshLabel = Label <$> fresh
-  
-label :: Label -> M ()
-label x = output (ppULabel x ++ ":")
-
-when' :: BoolT -> M () -> M ()
-when' x y = if' x y (return ())
-
-whenNot :: BoolT -> M () -> M ()
-whenNot x y = if' x (return ()) y
-
-if' :: BoolT -> M () -> M () -> M ()
-if' x y z = switch' x y [(false, z)]
-
-while :: M BoolT -> M () -> M ()
-while x y = do
-  loop <- freshLabel
-  istrue <- freshLabel
-  isfalse <- freshLabel
-  br loop
-  label loop
-  a <- x
-  switch a istrue [(False, isfalse)]
-  label istrue
-  y
-  br loop
-  label isfalse
-  
-nullptr :: Ty a => Val (Ptr a)
-nullptr = Lit $ Ptr 0
-
-withPtr :: Ty a => M (P a) -> M () -> (P a -> M ()) -> M ()
-withPtr m n f = do
-  p <- m
-  r <- p `eq` nullptr
-  if' r n (f p)
-
-sdl_init_timer :: IntT
-sdl_init_timer = int 0x00000001
-sdl_init_audio :: IntT
-sdl_init_audio = int 0x00000010
-sdl_init_video :: IntT
-sdl_init_video = int 0x00000020
-sdl_init_events :: IntT
-sdl_init_events = int 0x00004000
-
-sdlInit :: IntT -> M ()
-sdlInit = ffi "SDL_Init"
-
-sdlQuit :: M ()
-sdlQuit = ffi "SDL_Quit" ()
-
-sdlRenderPresent :: Renderer -> M ()
-sdlRenderPresent = ffi "SDL_RenderPresent"
-sdlRenderCopy :: (Renderer, Texture, P RectT, P RectT) -> M ()
-sdlRenderCopy = ffi "SDL_RenderCopy"
-sdlRenderClear :: Renderer -> M ()
-sdlRenderClear = ffi "SDL_RenderClear"
-sdlSetRenderDrawColor :: (Renderer, (Word8T, Word8T, Word8T, Word8T)) -> M ()
-sdlSetRenderDrawColor = ffi "SDL_SetRenderDrawColor"
-
-data RendererT = RendererT{ unRendererT :: Int }
-data RWopsT = RWopsT{ unRWopsT :: Int }
-data TextureT = TextureT{ unTextureT :: Int }
-data WindowT = WindowT{ unWindowT :: Int }
-
-type Window = P WindowT
-type Renderer = P RendererT
-type RWops = P RWopsT
-type Texture = P TextureT
-type Surface = P SurfaceT
-
-data SurfaceT
-data RectT
-
-tyRecStruct s = TyRec
-  { _toULit = \_ -> die $ "toULit: struct: " ++ s
-  , _unULit = \_ -> die $ "unULit: struct: " ++ s
-  , _ty = \_ -> return s
-  }
-
-data SDL_Keysym
-instance Ty SDL_Keysym where tyRec = tyRecStruct "%struct.SDL_Keysym"
-data SDL_KeyboardEvent
-instance Ty SDL_KeyboardEvent where tyRec = tyRecStruct "%struct.SDL_KeyboardEvent"
-data SDL_Event
-instance Ty SDL_Event where tyRec = tyRecStruct "%union.SDL_Event"
-data SDL_TouchFingerEvent
-instance Ty SDL_TouchFingerEvent where tyRec = tyRecStruct "%struct.SDL_TouchFingerEvent"
-
-instance Ty SurfaceT where tyRec = tyRecStruct "%struct.SDL_Surface"
-instance Ty RectT where tyRec = tyRecStruct "%struct.SDL_Rect"
-
-instance Ty WindowT where tyRec = tyRecInt WindowT unWindowT
-instance Ty RendererT where tyRec = tyRecInt RendererT unRendererT
-instance Ty RWopsT where tyRec = tyRecInt RWopsT unRWopsT
-instance Ty TextureT where tyRec = tyRecInt TextureT unTextureT
-
-withResource :: (Agg a, Ty b) =>
-  (a -> M (P b)) -> (P b -> M ()) -> String -> a -> (P b -> M ()) -> M ()
-withResource create destroy s x use =
-  withPtr (create x) (rerr s) $ \p -> do
-    use p
-    destroy p
-
-type Rect = ((IntT, IntT), (IntT, IntT))
-
-withWindow :: (CString, Rect, IntT) -> (Window -> M ()) -> M ()
-withWindow = withResource sdlCreateWindow sdlDestroyWindow "window"
-withWindowSurface :: Window -> (Surface -> M ()) -> M ()
-withWindowSurface = withResource sdlGetWindowSurface sdlFreeSurface "window surface"
-withRenderer :: (Window, IntT, IntT) -> (Renderer -> M ()) -> M ()
-withRenderer = withResource sdlCreateRenderer sdlDestroyRenderer "renderer"
-
-sdlCreateWindow :: (CString, Rect, IntT) -> M Window
-sdlCreateWindow = ffi "SDL_CreateWindow"
-
-sdlGetWindowSurface :: Window -> M Surface
-sdlGetWindowSurface = ffi "SDL_GetWindowSurface"
-
-sdlDestroyWindow :: Window -> M ()
-sdlDestroyWindow = ffi "SDL_DestroyWindow"
-
-sdlFreeSurface :: Surface -> M ()
-sdlFreeSurface = ffi "SDL_FreeSurface"
-
-sdlCreateRenderer :: (Window, IntT, IntT) -> M Renderer
-sdlCreateRenderer = ffi "SDL_CreateRenderer"
-
-sdlDestroyRenderer :: Renderer -> M ()
-sdlDestroyRenderer = ffi "SDL_DestroyRenderer"
-
-sdlCreateTextureFromSurface :: (Renderer, Surface) -> M Texture
-sdlCreateTextureFromSurface = ffi "SDL_CreateTextureFromSurface"
-
-sdlDestroyTexture :: Texture -> M ()
-sdlDestroyTexture = ffi "SDL_DestroyTexture"
-
-sdlRWFromFile :: (CString, CString) -> M RWops
-sdlRWFromFile = ffi "SDL_RWFromFile"
-
-sdlLoadBMP_RW :: (RWops, IntT) -> M Surface
-sdlLoadBMP_RW = ffi "SDL_LoadBMP_RW"
-
-type BoolT = Val Bool
-
-sdlLoadBMP :: CString -> M Surface
-sdlLoadBMP x = do
-  s <- str "rb"
-  p <- sdlRWFromFile (x, s)
-  sdlLoadBMP_RW (p, int 1)
-
-err :: String -> M ()
-err x = str ("error:" ++ x) >>= puts
-
-rerr :: String -> M ()
-rerr x = err $ "unable to create " ++ x
-
-sdl_renderer_accelerated :: IntT
-sdl_renderer_accelerated = int 0x00000002
-
-str :: String -> M CString
-str s = do
-  tbl <- gets strings
-  p <- case M.lookup s tbl of
-    Just v -> return v
-    Nothing -> do
-      i <- fresh
-      let v = fvar "i8**" i
-      modify $ \st -> st{ strings = M.insert s v tbl }
-      return v
-  load p
-
-fvar t i = Var t $ "@g" ++ show i
-
-withBMPTexture :: (Renderer, CString) -> (IntT -> IntT -> Texture -> M ()) -> M ()
-withBMPTexture (rndr, n) f = do
-  bmp <- sdlLoadBMP n
-  r <- bmp `eq` nullptr
-  if' r (rerr "BMP surface") $ do
-    tex <- sdlCreateTextureFromSurface(rndr, bmp)
-    w <- surfaceW bmp >>= load
-    h <- surfaceH bmp >>= load
-    sdlFreeSurface bmp
-    r <- tex `eq` nullptr
-    if' r (rerr "BMP texture") $ do
-      f w h tex
-      sdlDestroyTexture tex
-
-withSDL :: IntT -> M a -> M a
-withSDL x m = do
-  sdlInit x
-  a <- m
-  sdlQuit
-  return a
-
-load :: Ty a => P a -> M (Val a)
-load x = assign $ \_ -> prim_ "load" [pp x]
-
-ifNot x y z = if' x z y
-  
-notQuit :: P SDL_Event -> (Int -> Int -> M ()) -> M BoolT
-notQuit e f = do
-  r <- alloca'
-  v <- sdlPollEvent e >>= eq (int 0)
-  store v r
-  whenNot v $ do
-    t <- etype e >>= load
-    v <- t `ne` sdl_quit
-    store v r
-    when' v $ do
-      v <- t `eq` sdl_keydown
-      when' v $ do
-        k <- key e >>= keysym >>= sym >>= load
-        switch' k (f 0 0)
-          [ (intc 'j', f 0 (-1))
-          , (intc 'k', f 0 1)
-          , (intc 'd', f (-1) 0)
-          , (intc 'f', f 1 0)
-          ]
-  load r
-
-intc :: Char -> IntT
-intc = int . fromEnum
-
-etype :: P SDL_Event -> M (P Int)
-etype x = (bitcast x :: M (P SDL_TouchFingerEvent)) >>= fld 0
-
-sym :: P SDL_Keysym -> M (P SDL_Keycode)
-sym = fld 1
-
-key :: P SDL_Event -> M (P SDL_KeyboardEvent)
-key = bitcast
-
-keysym :: P SDL_KeyboardEvent -> M (P SDL_Keysym)
-keysym = fld 7
-
-type SDL_Keycode = Int
-
-char :: Char -> Val Char
-char = Lit
-
-unLit x = case x of
-  Lit a -> a
-  Var _ n -> die $ "unLit: not a literal:" ++ n
-
-die s = error $ "error:" ++ s
-
-rectW :: P RectT -> M (P Int)
-rectW = fld 2
-
-rectH :: P RectT -> M (P Int)
-rectH = fld 3
-
-rectX :: P RectT -> M (P Int)
-rectX = fld 0
-
-rectY :: P RectT -> M (P Int)
-rectY = fld 1
-
-surfaceW :: P SurfaceT -> M (P Int)
-surfaceW = fld 2
-
-surfaceH :: P SurfaceT -> M (P Int)
-surfaceH = fld 3
-
-main' :: Proc () IntT
-main' = proc_ "main" $ do
-  withSDL sdl_init_video $ do
-    s <- str "Hello World"
-    let (width, height) = (int 640, int 480)
-    withWindow (s, ((int 100, int 100), (width, height)), int 0) $ \win ->
-      withWindowSurface win $ \_ ->
-      withRenderer (win, int (-1), sdl_renderer_accelerated) $ \rndr -> do
-        sdlSetRenderDrawColor (rndr, (w8 0xff, w8 0xff, w8 0xff, w8 0xff))
-        s <- str "ship.bmp"
-        withBMPTexture (rndr, s) $ \w h ship -> do
-          e <- alloca'
-          rect <- alloca'
-          rx <- rectX rect
-          ry <- rectY rect
-          rw <- rectW rect
-          rh <- rectH rect
-          store (int 10) rx
-          store (int 20) ry
-          store w rw
-          store h rh
-          let f i j = do
-                dx <- alloca'
-                dy <- alloca'
-                store (int i) dx
-                store (int j) dx
-                load dx >>= inc rx
-                load dy >>= inc ry
-          while (notQuit e f) $ do
-            sdlRenderClear rndr
-            sdlRenderCopy (rndr, ship, nullptr, rect)
-            sdlRenderPresent rndr
-  ret $ int 0
-
-inc p x = load p >>= add x >>= store' p
-  
-sdlPollEvent :: P SDL_Event -> M IntT
-sdlPollEvent = ffi "SDL_PollEvent"
-
-sdl_quit :: IntT
-sdl_quit = int 0x100
-
-sdl_keydown :: IntT
-sdl_keydown = int 0x300
-
-andM :: M BoolT -> M BoolT -> M BoolT
-andM x y = do
-  p <- alloca'
-  a <- x
-  store a p
-  when' a $ y >>= store' p
-  load p
-  
-orM :: M BoolT -> M BoolT -> M BoolT
-orM x y = do
-  p <- alloca'
-  a <- x
-  store a p
-  whenNot a (y >>= store' p)
-  load p
-
-true = Lit True
-false = Lit False
+-- import Data.Int
 
 main :: IO ()
 main = eval $ do
@@ -989,8 +34,142 @@ main = eval $ do
 --     br $ Label 0
 --     call "foo" (x, v)
 --     ret
--}
 
+main' :: Proc () IntT
+main' = proc_ "main" $ do
+  withSDL sdl_init_video $ do
+    s <- str "Hello World"
+    let (width, height) = (int 640, int 480)
+    withWindow (s, int 100, int 100, width, height, int 0) $ \win ->
+      withWindowSurface win $ \_ ->
+      withRenderer (win, int (-1), sdl_renderer_accelerated) $ \rndr -> do
+        _ <- sDL_SetRenderDrawColor (rndr, w8 0xff, w8 0xff, w8 0xff, w8 0xff)
+        s <- str "ship.bmp"
+        withBMPTexture (rndr, s) $ \w h ship -> do
+          e <- alloca'
+          rect <- alloca'
+          rx <- r_x rect
+          ry <- r_y rect
+          rw <- r_w rect
+          rh <- r_h rect
+          store (int 10) rx
+          store (int 20) ry
+          store w rw
+          store h rh
+          let f i j = do
+                dx <- alloca'
+                dy <- alloca'
+                store (int i) dx
+                store (int j) dx
+                load dx >>= inc rx
+                load dy >>= inc ry
+          while (notQuit e f) $ do
+            _ <- sDL_RenderClear rndr
+            _ <- sDL_RenderCopy (rndr, ship, nullptr, rect)
+            sDL_RenderPresent rndr
+  ret $ int 0
+
+withSDL :: IntT -> M () -> M ()
+withSDL x m = do
+  i <- sDL_Init x
+  r <- i `ne` int 0
+  if' r (rerr "unable to initialize sdl") $ do
+    m
+    sDL_Quit
+
+-- declStruct :: ([Type], Type) -> M ()
+-- declStruct (ts, t) =
+--   unwordsM [ return t, return "= type", braces $ commaSep $ map return ts ] >>= output
+
+withWindow :: (CString, IntT, IntT, IntT, IntT, IntT) -> (P SDL_Window -> M ()) -> M ()
+withWindow = withResource sDL_CreateWindow sDL_DestroyWindow "window"
+
+withWindowSurface :: P SDL_Window -> (P SDL_Surface -> M ()) -> M ()
+withWindowSurface = withResource sDL_GetWindowSurface sDL_FreeSurface "window surface"
+
+withRenderer :: (P SDL_Window, IntT, IntT) -> (P SDL_Renderer -> M ()) -> M ()
+withRenderer = withResource sDL_CreateRenderer sDL_DestroyRenderer "renderer"
+
+withResource :: (Agg a, Ty b) =>
+  (a -> M (P b)) -> (P b -> M ()) -> String -> a -> (P b -> M ()) -> M ()
+withResource create destroy s x use =
+  withPtr (create x) (rerr s) $ \p -> do
+    use p
+    destroy p
+
+sdlLoadBMP :: CString -> M (P SDL_Surface)
+sdlLoadBMP x = do
+  s <- str "rb"
+  p <- sDL_RWFromFile (x, s)
+  sDL_LoadBMP_RW (p, int 1)
+
+withBMPTexture :: (P SDL_Renderer, CString) -> (IntT -> IntT -> P SDL_Texture -> M ()) -> M ()
+withBMPTexture (rndr, n) f = do
+  bmp <- sdlLoadBMP n
+  r <- bmp `eq` nullptr
+  if' r (rerr "BMP surface") $ do
+    tex <- sDL_CreateTextureFromSurface(rndr, bmp)
+    w <- s_w bmp >>= load
+    h <- s_h bmp >>= load
+    sDL_FreeSurface bmp
+    r <- tex `eq` nullptr
+    if' r (rerr "BMP texture") $ do
+      f w h tex
+      sDL_DestroyTexture tex
+
+ifNot x y z = if' x z y
+  
+notQuit :: P SDL_Event -> (Int -> Int -> M ()) -> M BoolT
+notQuit e f = do
+  r <- alloca'
+  v <- sDL_PollEvent e >>= eq (int 0)
+  store v r
+  whenNot v $ do
+    t <- e_type e >>= load
+    v <- t `ne` sdl_quit
+    store v r
+    when' v $ do
+      v <- t `eq` sdl_keydown
+      when' v $ do
+        k <- e_key e >>= ke_keysym >>= ks_sym >>= load
+        switch' k (f 0 0)
+          [ (intc 'j', f 0 (-1))
+          , (intc 'k', f 0 1)
+          , (intc 'd', f (-1) 0)
+          , (intc 'f', f 1 0)
+          ]
+  load r
+
+inc p x = load p >>= add x >>= store' p
+
+andM :: M BoolT -> M BoolT -> M BoolT
+andM x y = do
+  p <- alloca'
+  a <- x
+  store a p
+  when' a $ y >>= store' p
+  load p
+  
+orM :: M BoolT -> M BoolT -> M BoolT
+orM x y = do
+  p <- alloca'
+  a <- x
+  store a p
+  whenNot a (y >>= store' p)
+  load p
+
+{-
+import Control.Monad.State hiding (forever)
+import Data.Char
+import Data.Foldable
+import Data.List (intersperse)
+import Data.Map.Strict (Map)
+import Data.Set (Set)
+import Data.Word
+import Prelude hiding (concat, foldr, maximum)
+import qualified Data.Map.Strict as M
+
+-}
 {-
 
 ppVar t i = t ++ show i

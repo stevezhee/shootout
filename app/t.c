@@ -1,5 +1,6 @@
 // clang t.c -lcygwin -lSDL2main -lSDL2
-// cp t.c t.c++; clang -std=c++11 -S -emit-llvm t.c++; cat t.s
+// clang -std=c++11 -S -emit-llvm
+
 #include <stdio.h>
 #include <SDL2/SDL.h>
 SDL_Rect _rec_SDL_Rect_rec_;
