@@ -14,12 +14,13 @@ else
 	FFI-EXE = ~/AppData/Roaming/local/bin/shootout-ffi.exe
 endif
 
-all : shoot
-shoot :
+all : ffi
+
+shoot : shootout.cabal
 	stack install
 #	$(EXE)
 
-ffi :
+ffi : shootout-ffi.cabal
 	stack install
 	$(FFI-EXE)
 	mv SDL.hs src
@@ -28,11 +29,11 @@ ffi :
 	# clang t.s -lSDL2
 	# ./a.out
 
-ffi_switch :
+shootout-ffi.cabal :
 	mv shootout.cabal shootout.cabal.keep
 	mv shootout-ffi.cabal.keep shootout-ffi.cabal
 
-switch :
+shootout.cabal :
 	mv shootout-ffi.cabal shootout-ffi.cabal.keep
 	mv shootout.cabal.keep shootout.cabal
 
