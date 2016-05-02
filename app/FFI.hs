@@ -1,3 +1,4 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wall #-}
 
 module Main(main) where
@@ -18,102 +19,10 @@ import Language.C.Analysis
 -- import Control.Arrow
 import Data.Map hiding (filter, (\\))
 -- import Data.List
-
--- listof :: (a -> Maybe b) -> [a] -> [b]
--- listof f = catMaybes . fmap f
-
--- cDeclExt :: CExternalDeclaration a -> Maybe (CDeclaration a)
--- cDeclExt x = case x of
---   CDeclExt a -> Just a
---   _ -> Nothing
-
--- stuff = do
---   return ()
+import Data.Graph
 
 checkResult :: (Show a) => String -> (Either a b) -> IO b
 checkResult label = either (error . (label++) . show) return
-             
--- 42 EnumDef
--- isTagEvent (TagEvent (EnumDef{})) = True
--- 63 CompDef
--- isTagEvent (TagEvent (CompDef{})) = True
--- isTagEvent (TypeDefEvent{} ) = True == 0
--- isTagEvent (LocalEvent{} ) = True == 0
--- isTagEvent (DeclEvent{} ) = True == 0
--- isTagEvent _ = True
--- isTagEvent _ = False
-  
--- typename can be either a int/void/etc or user or anon
-
--- typedefref is user
-
--- type is ptr, array, function constructed or
---         typename* or
---         typedefref
-
--- tagdef is union/struct with user or anon and [member] or
---           enum type with user or anon and [enum]
--- type M a = StateT St IO a
--- data St = St
---   { tys :: Map Ty TyName
---   , szs :: Map ArraySize SzName
---   }
-
--- type FunTy = (TyName, [TyName])
-
--- typeNameToTyName :: TypeName -> M TyName
--- typeNameToTyName x = case x of
---   TyVoid -> "void"
---   TyIntegral a -> show a
---   TyFloating a -> show a
---   TyComp a b _ -> case b of
---     StructTag -> 
---   TyEnum EnumTypeRef	 - sueRef
---   TyComplex{} -> error "TyComplex"
---   TyBuiltin _ -> error "TyBuiltin"
-
--- typeToTyName :: Type -> M TyName
--- typeToTyName = undefined
-
--- arraySizeToSzName :: ArraySize -> M SzName
--- arraySizeToSzName = \_ -> return "SOME_SIZE"
-
--- funTypeToFunTy :: FunType -> M FunTy
--- funTypeToFunTy x = case x of
---   FunType a bs False -> (,) <$> typeToTyName a <*> mapM toTyName bs
---   _ -> error $ "funTypeToFunTy"
-
--- typeDefRefToTyName :: TypeDefRef -> M TyName
--- typeDefRefToTyName (TypeDefRef a _ _) = return $ identToString a
-
--- toTyName :: Declaration a => a -> M TyName
--- toTyName = typeToTyName . declType
-  
--- typeToTy :: Type -> M Ty
--- typeToTy x = case x of
---   DirectType a _ _ -> TyName <$> typeNameToTyName a
---   PtrType a _ _ -> Ptr <$> typeToTyName a
---   ArrayType a b _ _ -> Array <$> arraySizeToSzName b <*> typeToTyName a
---   FunctionType a _ -> Func <$> funTypeToFunTy a
---   TypeDefType a _ _ -> TyName <$> typeDefRefToTyName a
-
---  let enums :: [(Id, Type)] = fmap declIdentType $ elems fs
-  -- let (anonenums, idenums) = splitSUERef enums
-  -- let (anonstructs, idstructs) = splitSUERef structs
-  -- let (anonunions, idunions) = splitSUERef unions
---  return $ fmap suerefToString $ keys $ gTags $ filterGlobalDecls isTagEvent globals
---  let bs :: [String] = fmap suerefToString $ keys $ gTags $ filterGlobalDecls isTagEvent globals
-  -- let cs :: [String] = fmap identToString $ keys $ gTypeDefs $ filterGlobalDecls isTagEvent globals
-  -- let tys = fmap (\(a,b) -> (suerefToString a, fooOfTagDef b)) $ toList $ gTags globals
-  -- let blarg = fmap identToString . keys
---  let ds = fmap fst $ filter (\(a,b) -> identToString a == "extern_func") $ toList $ gObjs globals
---  return $ (bs, cs, ds) -- , fmap identToString ds)
-
--- gTags = 105
--- gObjs = 1475
--- gTypeDefs = 201 (200?)
-
--- type FieldName = String
 
 declTy :: Declaration a => a -> Ty
 declTy = typeToTy . declType
@@ -134,6 +43,19 @@ data UserOrAnon
   | Anon Int
     deriving (Show, Eq)
 
+getTyNames = nub . concatMap loop
+  where
+    loop x = case x of
+      Array a -> loop a
+      Ptr a -> loop a
+      Function a bs -> loop a ++ concatMap loop bs
+      Prim{} -> []
+      UATy (User a) -> [a]
+      UATy (Anon{}) -> error "loop - anonymous name not removed"
+      Struct bs -> concatMap loop $ fmap snd bs
+      Union bs -> concatMap loop $ fmap snd bs
+      Enum{} -> []
+  
 data Ty
   = Array Ty -- ArraySize
   | Ptr Ty
@@ -226,7 +148,10 @@ ppTy x = case x of
       Prim a -> case a of
         "int" -> "Int"
         "unsigned int" -> "Word"
+        "unsigned short" -> "Word16" -- BAL:?
         "long" -> "Int64" -- BAL:?
+        "long long" -> "Int128" -- BAL:?
+        "unsigned long long" -> "Word128" -- BAL:?
         "unsigned long" -> "Word64" -- BAL:?
         "long double" -> "LongDouble" -- BAL:?
         "double" -> "Double"
@@ -255,6 +180,10 @@ ppTyFunc y zs = unwords [pre, post]
       Prim "void" -> "M ()"
       _ -> unwords [ "M", parens $ ppTy y ]
 
+isSDL x = case x of
+  'S':'D':'L':_ -> True
+  _ -> False
+  
 ppField (x, Struct ys) = mapM_ f $ zip ys [0 :: Int .. ]
   where
     f ((y,t),i) = do
@@ -284,11 +213,117 @@ main = do
           let tagdefs :: [(UserOrAnon, Ty)] = fmap tagDefToTy $ elems $ gTags globals
           let tbl = Data.List.foldr anonToUser (concatMap idToUser tydefs) tagdefs
           let f = unAnon tbl
-          let tydefs' = [ (a, unAnonTy f b) | (a,b) <- tydefs ++ [ (f a, b) | (a,b) <- tagdefs] ]
-          mapM_ ppFunc [ (a, unAnonTy f b) | (a,b) <- funcs ]
-          mapM_ ppField tydefs'
+          let tydefs' =
+                [ (a, unAnonTy f b)
+                | (a, b) <- tydefs ++ [ (f a, b) | (a,b) <- tagdefs]
+                ]
+          let funcs' = filter (isSDL . fst) funcs
+--          mapM_ ppFunc funcs'
+          let (gr, f, g) = graphFromEdges [ (n, a, getTyNames [b]) | n@(a,b) <- tydefs' ]
+          let g' = maybe (error "unknown key") id . g
+          let f' v = let (a,_,_) = f v in a
+          let sdltynames = getTyNames $ fmap snd funcs'
+          let tys = fmap f' $ nub $ concatMap (reachable gr) $ fmap g' sdltynames
+          mapM_ print tys
+ --         print tydefs'
+--          mapM_ ppField tydefs'
           return ()
       return ()
+
+-- reachable :: Graph -> Vertex -> [Vertex]
+
+-- listof :: (a -> Maybe b) -> [a] -> [b]
+-- listof f = catMaybes . fmap f
+
+-- cDeclExt :: CExternalDeclaration a -> Maybe (CDeclaration a)
+-- cDeclExt x = case x of
+--   CDeclExt a -> Just a
+--   _ -> Nothing
+
+-- stuff = do
+--   return ()
+             
+-- 42 EnumDef
+-- isTagEvent (TagEvent (EnumDef{})) = True
+-- 63 CompDef
+-- isTagEvent (TagEvent (CompDef{})) = True
+-- isTagEvent (TypeDefEvent{} ) = True == 0
+-- isTagEvent (LocalEvent{} ) = True == 0
+-- isTagEvent (DeclEvent{} ) = True == 0
+-- isTagEvent _ = True
+-- isTagEvent _ = False
+  
+-- typename can be either a int/void/etc or user or anon
+
+-- typedefref is user
+
+-- type is ptr, array, function constructed or
+--         typename* or
+--         typedefref
+
+-- tagdef is union/struct with user or anon and [member] or
+--           enum type with user or anon and [enum]
+-- type M a = StateT St IO a
+-- data St = St
+--   { tys :: Map Ty TyName
+--   , szs :: Map ArraySize SzName
+--   }
+
+-- type FunTy = (TyName, [TyName])
+
+-- typeNameToTyName :: TypeName -> M TyName
+-- typeNameToTyName x = case x of
+--   TyVoid -> "void"
+--   TyIntegral a -> show a
+--   TyFloating a -> show a
+--   TyComp a b _ -> case b of
+--     StructTag -> 
+--   TyEnum EnumTypeRef	 - sueRef
+--   TyComplex{} -> error "TyComplex"
+--   TyBuiltin _ -> error "TyBuiltin"
+
+-- typeToTyName :: Type -> M TyName
+-- typeToTyName = undefined
+
+-- arraySizeToSzName :: ArraySize -> M SzName
+-- arraySizeToSzName = \_ -> return "SOME_SIZE"
+
+-- funTypeToFunTy :: FunType -> M FunTy
+-- funTypeToFunTy x = case x of
+--   FunType a bs False -> (,) <$> typeToTyName a <*> mapM toTyName bs
+--   _ -> error $ "funTypeToFunTy"
+
+-- typeDefRefToTyName :: TypeDefRef -> M TyName
+-- typeDefRefToTyName (TypeDefRef a _ _) = return $ identToString a
+
+-- toTyName :: Declaration a => a -> M TyName
+-- toTyName = typeToTyName . declType
+  
+-- typeToTy :: Type -> M Ty
+-- typeToTy x = case x of
+--   DirectType a _ _ -> TyName <$> typeNameToTyName a
+--   PtrType a _ _ -> Ptr <$> typeToTyName a
+--   ArrayType a b _ _ -> Array <$> arraySizeToSzName b <*> typeToTyName a
+--   FunctionType a _ -> Func <$> funTypeToFunTy a
+--   TypeDefType a _ _ -> TyName <$> typeDefRefToTyName a
+
+--  let enums :: [(Id, Type)] = fmap declIdentType $ elems fs
+  -- let (anonenums, idenums) = splitSUERef enums
+  -- let (anonstructs, idstructs) = splitSUERef structs
+  -- let (anonunions, idunions) = splitSUERef unions
+--  return $ fmap suerefToString $ keys $ gTags $ filterGlobalDecls isTagEvent globals
+--  let bs :: [String] = fmap suerefToString $ keys $ gTags $ filterGlobalDecls isTagEvent globals
+  -- let cs :: [String] = fmap identToString $ keys $ gTypeDefs $ filterGlobalDecls isTagEvent globals
+  -- let tys = fmap (\(a,b) -> (suerefToString a, fooOfTagDef b)) $ toList $ gTags globals
+  -- let blarg = fmap identToString . keys
+--  let ds = fmap fst $ filter (\(a,b) -> identToString a == "extern_func") $ toList $ gObjs globals
+--  return $ (bs, cs, ds) -- , fmap identToString ds)
+
+-- gTags = 105
+-- gObjs = 1475
+-- gTypeDefs = 201 (200?)
+
+-- type FieldName = String
 
 -- typeToNames :: Type -> [Name]
 -- typeToNames x = case canonicalType x of
