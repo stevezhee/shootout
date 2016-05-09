@@ -14,7 +14,11 @@ else
 	FFI-EXE = ~/AppData/Roaming/local/bin/shootout-ffi.exe
 endif
 
-all : ffi
+all : app/a.out
+	(cd app; ./a.out)
+
+app/a.out : app/t.c
+	(cd app; rm -f a.out; clang -Werror -Wall -pedantic -Wextra t.c -lcygwin -lSDL2main -lSDL2)
 
 shoot : shootout.cabal
 	stack install
